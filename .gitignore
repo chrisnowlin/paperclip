@@ -78,3 +78,8 @@ tests/storybook-visual/playwright-report/
 .vercel/
 .env.local
 test-results/
+
+# Personal macOS wrapper build products
+/dist/
+/macos/PaperclipStandaloneDev/.build/
+/macos/PaperclipStandaloneDev/runtime/
