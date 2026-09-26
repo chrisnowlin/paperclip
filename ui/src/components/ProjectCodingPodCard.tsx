@@ -36,6 +36,7 @@ export function ProjectCodingPodCard({ agents, pod, loading, isolatedWorkspacesE
       {!isolatedWorkspacesEnabled ? <p className="text-sm text-muted-foreground">
         Enable isolated workspaces in <Link className="underline" to="/company/settings/instance/experimental">instance settings</Link> before running a coding pod.
       </p> : null}
+      <p className="text-sm text-muted-foreground">The reviewer must use an active sandbox environment as its default. Configure its environment in <Link className="underline" to="/company/settings/instance/environments">instance environments</Link> before saving.</p>
       {loading ? <p className="text-sm text-muted-foreground">Loading coding pod…</p> : null}
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="flex flex-col gap-2 text-sm font-medium">Owner agent

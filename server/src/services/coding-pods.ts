@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { and, eq, inArray, or, sql } from "drizzle-orm";
-import { agents, codingPodIssueBindings, codingPods, heartbeatRuns, issues, projectWorkspaces, projects, type Db } from "@paperclipai/db";
+import { agents, codingPodIssueBindings, codingPods, environments, heartbeatRuns, issues, projectWorkspaces, projects, type Db } from "@paperclipai/db";
 import { normalizeIssueExecutionPolicy } from "./issue-execution-policy.js";
 import { issueService } from "./issues.js";
 import { getLatestCodingPodCandidate, readCodingPodCandidateSnapshot } from "./coding-pod-candidates.js";
@@ -172,6 +172,7 @@ export function codingPodService(db: Db) {
 
       const selected = await db.select({
         id: agents.id, companyId: agents.companyId, status: agents.status, adapterType: agents.adapterType,
+        defaultEnvironmentId: agents.defaultEnvironmentId,
       }).from(agents).where(and(
         eq(agents.companyId, companyId),
         inArray(agents.id, [input.ownerAgentId, input.reviewerAgentId]),
@@ -184,6 +185,15 @@ export function codingPodService(db: Db) {
         }
         if (!LOCAL_CODING_ADAPTERS.has(agent.adapterType) || !findActiveServerAdapter(agent.adapterType)) {
           throw unprocessable(`Coding pod ${role} needs an available local coding adapter`);
+        }
+        if (role === "reviewer") {
+          const [reviewEnvironment] = agent.defaultEnvironmentId
+            ? await db.select({ driver: environments.driver, status: environments.status }).from(environments)
+                .where(eq(environments.id, agent.defaultEnvironmentId)).limit(1)
+            : [];
+          if (reviewEnvironment?.driver !== "sandbox" || reviewEnvironment.status !== "active") {
+            throw unprocessable("Coding pod reviewer must select an active sandbox environment as its default before review can run");
+          }
         }
       }
 

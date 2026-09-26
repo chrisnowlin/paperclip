@@ -6,7 +6,7 @@ import express from "express";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { agents, agentWakeupRequests, companies, createDb, issues, projects, projectWorkspaces } from "@paperclipai/db";
+import { agents, agentWakeupRequests, companies, createDb, environments, issues, projects, projectWorkspaces } from "@paperclipai/db";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { codingPodRoutes } from "../routes/coding-pods.js";
 import { codingPodService } from "../services/coding-pods.js";
@@ -22,10 +22,12 @@ describeDb("coding pod issue attachment", () => {
   let app: express.Express;
   let actor: Record<string, unknown>;
   let serial = 0;
+  let sandboxEnvironmentId: string;
 
   beforeAll(async () => {
     database = await startEmbeddedPostgresTestDatabase("paperclip-pod-attachment-");
     db = createDb(database.connectionString);
+    sandboxEnvironmentId = (await db.insert(environments).values({ name: "Review sandbox", driver: "sandbox", status: "active", config: { provider: "test" } }).returning())[0]!.id;
     repo = mkdtempSync(join(tmpdir(), "paperclip-pod-attachment-repo-"));
     execFileSync("git", ["init", "-q", repo]);
     execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-qm", "base"]);
@@ -48,7 +50,7 @@ describeDb("coding pod issue attachment", () => {
     const [project] = await db.insert(projects).values({ companyId: company.id, name: `Attach Project ${serial}` }).returning();
     await db.insert(projectWorkspaces).values({ companyId: company.id, projectId: project.id, name: "primary", sourceType: "git_repo", cwd: repo, isPrimary: true });
     const [owner] = await db.insert(agents).values({ companyId: company.id, name: "Owner", status: "idle", adapterType: "codex_local" }).returning();
-    const [reviewer] = await db.insert(agents).values({ companyId: company.id, name: "Reviewer", status: "idle", adapterType: "opencode_local" }).returning();
+    const [reviewer] = await db.insert(agents).values({ companyId: company.id, name: "Reviewer", status: "idle", adapterType: "opencode_local", defaultEnvironmentId: sandboxEnvironmentId }).returning();
     const [issue] = await db.insert(issues).values({ companyId: company.id, projectId: project.id, title: "Implement feature", status: "backlog", ...issuePatch }).returning();
     await codingPodService(db).upsert(company.id, project.id, { ownerAgentId: owner.id, reviewerAgentId: reviewer.id, enabled: true });
     return { company, project, owner, reviewer, issue };
@@ -82,7 +84,7 @@ describeDb("coding pod issue attachment", () => {
     const url = path(company.id, issue.id);
     const first = await request(app).post(url).send({});
     expect(first.status).toBe(200);
-    const [otherReviewer] = await db.insert(agents).values({ companyId: company.id, name: "Other Reviewer", status: "idle", adapterType: "codex_local" }).returning();
+    const [otherReviewer] = await db.insert(agents).values({ companyId: company.id, name: "Other Reviewer", status: "idle", adapterType: "codex_local", defaultEnvironmentId: sandboxEnvironmentId }).returning();
     await codingPodService(db).upsert(company.id, project.id, { ownerAgentId: owner.id, reviewerAgentId: otherReviewer.id, enabled: true });
     const repeated = await request(app).post(url).send({});
     expect(repeated.status).toBe(200);

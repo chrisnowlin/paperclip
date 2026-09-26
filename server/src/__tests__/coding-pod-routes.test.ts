@@ -5,7 +5,7 @@ import { join } from "node:path";
 import express from "express";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { agents, agentWakeupRequests, companies, createDb, projects, projectWorkspaces } from "@paperclipai/db";
+import { agents, agentWakeupRequests, companies, createDb, environments, projects, projectWorkspaces } from "@paperclipai/db";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { codingPodRoutes } from "../routes/coding-pods.js";
 import { errorHandler } from "../middleware/error-handler.js";
@@ -20,10 +20,12 @@ describeDb("coding pod project routes", () => {
   let serial = 0;
   let actor: Record<string, unknown>;
   let app: express.Express;
+  let sandboxEnvironmentId: string;
 
   beforeAll(async () => {
     database = await startEmbeddedPostgresTestDatabase("paperclip-coding-pods-");
     db = createDb(database.connectionString);
+    sandboxEnvironmentId = (await db.insert(environments).values({ name: "Review sandbox", driver: "sandbox", status: "active", config: { provider: "test" } }).returning())[0]!.id;
     repo = mkdtempSync(join(tmpdir(), "paperclip-coding-pod-repo-"));
     execFileSync("git", ["init", "-q", repo]);
     execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-qm", "base"]);
@@ -40,7 +42,7 @@ describeDb("coding pod project routes", () => {
     await database?.cleanup();
   });
 
-  async function fixture(options: { git?: boolean; ownerStatus?: string; reviewerStatus?: string; reviewerCompany?: string; reviewerAdapter?: string } = {}) {
+  async function fixture(options: { git?: boolean; ownerStatus?: string; reviewerStatus?: string; reviewerCompany?: string; reviewerAdapter?: string; reviewerSandbox?: boolean } = {}) {
     serial += 1;
     const [company] = await db.insert(companies).values({ name: `Pod Co ${serial}`, issuePrefix: `PD${serial}` }).returning();
     const otherCompany = options.reviewerCompany === "other"
@@ -51,7 +53,8 @@ describeDb("coding pod project routes", () => {
       await db.insert(projectWorkspaces).values({ companyId: company.id, projectId: project.id, name: "primary", sourceType: "git_repo", cwd: repo, isPrimary: true });
     }
     const [owner] = await db.insert(agents).values({ companyId: company.id, name: "Owner", status: options.ownerStatus ?? "idle", adapterType: "codex_local" }).returning();
-    const [reviewer] = await db.insert(agents).values({ companyId: otherCompany.id, name: "Reviewer", status: options.reviewerStatus ?? "idle", adapterType: options.reviewerAdapter ?? "opencode_local" }).returning();
+    const [reviewer] = await db.insert(agents).values({ companyId: otherCompany.id, name: "Reviewer", status: options.reviewerStatus ?? "idle", adapterType: options.reviewerAdapter ?? "opencode_local",
+      defaultEnvironmentId: options.reviewerSandbox === false ? null : sandboxEnvironmentId }).returning();
     return { company, project, owner, reviewer };
   }
 
@@ -71,6 +74,15 @@ describeDb("coding pod project routes", () => {
     expect(second.body.id).toBe(first.body.id);
     expect((await request(app).get(path)).body.enabled).toBe(false);
     expect(await db.select().from(agentWakeupRequests)).toHaveLength(0);
+  });
+
+  it("requires an explicitly selected sandbox environment for the reviewer", async () => {
+    const { company, project, owner, reviewer } = await fixture({ reviewerSandbox: false });
+    const response = await request(app).put(url(company.id, project.id)).send({
+      ownerAgentId: owner.id, reviewerAgentId: reviewer.id, enabled: true,
+    });
+    expect(response.status).toBe(422);
+    expect(response.body.error).toContain("sandbox environment");
   });
 
   it("rejects foreign, identical, paused, and unavailable-adapter agents", async () => {

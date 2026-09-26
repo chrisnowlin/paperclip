@@ -7436,6 +7436,9 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
             companyPrefix={companyPrefix}
             repoUrl={resolvedProject?.codebase?.repoUrl ?? null}
             onOpenArtifacts={taskChatShellEnabled ? revealNewArtifact : undefined}
+            canDecide={Boolean(codingPodViewQuery.data?.binding &&
+              (currentUserId === codingPodViewQuery.data.binding.boardUserId ||
+               (!currentUserId && codingPodViewQuery.data.binding.boardUserId === "local-board")))}
           /> : null}
 
           {taskChatShellEnabled ? null : pluginOutletsBlock}

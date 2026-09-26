@@ -146,6 +146,20 @@ describeDb("coding pod candidate decisions", () => {
     expect(issue.status).toBe("in_review");
   });
 
+  it("does not let another board user's generic override accept a stale pod candidate", async () => {
+    const f = await fixture();
+    writeFileSync(join(f.repo, "late.txt"), "unreviewed change\n");
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => { (req as any).actor = { type: "board", userId: "other-board", source: "local_implicit", isInstanceAdmin: true }; next(); });
+    app.use("/api", issueRoutes(db, {} as any));
+    app.use(errorHandler);
+    const response = await request(app).patch(`/api/issues/${f.issue.id}`).send({ status: "done", comment: "Override" });
+    expect(response.status).toBe(409);
+    const [stored] = await db.select().from(issues).where(eq(issues.id, f.issue.id));
+    expect(stored.status).toBe("in_review");
+  });
+
   it("does not persist an auto-approval comment for a stale candidate", async () => {
     const f = await fixture();
     writeFileSync(join(f.repo, "late.txt"), "changed after review\n");

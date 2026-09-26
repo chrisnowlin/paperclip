@@ -55,6 +55,7 @@ describe("coding pod cockpit", () => {
     act(() => button.click());
     expect(save).toHaveBeenCalledWith({ ownerAgentId: "owner", reviewerAgentId: "reviewer", enabled: true });
     expect(element.textContent).toContain("No task starts when you save");
+    expect(element.textContent).toContain("sandbox environment");
   });
 
   it("shows isolated workspace setup path and API error", () => {
@@ -93,5 +94,12 @@ describe("coding pod cockpit", () => {
     expect(element.textContent).toContain("Return the task to the owner");
     expect(element.textContent).not.toContain("Approve candidate");
     expect(element.querySelector('a[href="/api/companies/co/issues/issue/coding-pod/diff?candidateId=candidate"]')).not.toBeNull();
+  });
+
+  it("does not offer the pinned board decision to another viewer", () => {
+    const element = render(<IssueCodingPodPanel view={{ binding, candidate, phase: "awaiting_board" }} loading={false} error={null} attachError={null}
+      issueStatus="in_review" podConfigured onAttach={vi.fn()} attaching={false} onDecide={vi.fn()} deciding={false} canDecide={false} />);
+    expect(element.textContent).toContain("Awaiting board");
+    expect(element.textContent).not.toContain("Approve candidate");
   });
 });

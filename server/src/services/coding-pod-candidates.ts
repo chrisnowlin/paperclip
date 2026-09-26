@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { isDeepStrictEqual, promisify } from "node:util";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { codingPodCandidates, codingPodIssueBindings, executionWorkspaces, issues, type Db } from "@paperclipai/db";
 import type { CodingPodCandidate } from "@paperclipai/shared";
@@ -11,6 +11,18 @@ export interface CodingPodGitSnapshot {
   workspaceId: string;
   baseSha: string;
   headSha: string;
+}
+
+export function assertCodingPodReviewSourceUnchanged(
+  original: { projectId: unknown; executionPolicy: unknown; executionState: unknown; statusVersion: unknown },
+  locked: { projectId: unknown; executionPolicy: unknown; executionState: unknown; statusVersion: unknown },
+): void {
+  if (original.projectId !== locked.projectId ||
+      Number(original.statusVersion) !== Number(locked.statusVersion) ||
+      !isDeepStrictEqual(original.executionPolicy, locked.executionPolicy) ||
+      !isDeepStrictEqual(original.executionState, locked.executionState)) {
+    throw conflict("Coding pod task policy or project changed while capturing its candidate");
+  }
 }
 
 export async function resolveCodingPodReviewerWorkspacePlan(

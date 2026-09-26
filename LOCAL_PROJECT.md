@@ -33,7 +33,7 @@ V2 packages local source. Edits to `ui/`, `server/`, and their workspace depende
 
 ## Governed coding cockpit
 
-In V2, open a project's **Configuration** tab to choose an active owner agent and a different active reviewer agent. The project needs a local Git-backed primary workspace and isolated workspaces enabled in instance settings. Saving the pod only records configuration.
+In V2, open a project's **Configuration** tab to choose an active owner agent and a different active reviewer agent. The project needs a local Git-backed primary workspace and isolated workspaces enabled in instance settings. The reviewer must have an active sandbox environment selected as its default; configure a sandbox provider and that agent's environment before saving. Saving the pod only records configuration.
 
 On a parked backlog task in that project, choose **Attach coding pod**. Attachment pins the owner, reviewer, and board approver to that task and leaves it parked. Start the owner through the normal Paperclip workflow when ready. A clean committed owner worktree becomes an exact Git candidate before reviewer dispatch. The reviewer uses a separate worktree pinned to that commit and a restricted read/test policy. The task cockpit links the candidate comparison through GitHub when available or a bounded local diff otherwise, plus the workspaces, plan, work products, run ledger, and stage comments. Board approval requires a written decision and the candidate must still match the source worktree. If it moved or became dirty, return the task to the owner for a new clean candidate.
 

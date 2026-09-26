@@ -6,7 +6,7 @@ import {
   validateExecutionReconciliation,
   markExecutionReconciliation,
 } from "../services/execution-recovery-resolution.js";
-import { assertCodingPodCandidateFreshForDecision, insertCodingPodCandidate, readCodingPodCandidateSnapshot } from "../services/coding-pod-candidates.js";
+import { assertCodingPodCandidateFreshForDecision, assertCodingPodReviewSourceUnchanged, insertCodingPodCandidate, readCodingPodCandidateSnapshot } from "../services/coding-pod-candidates.js";
 import {
   storedSteeringAcknowledgement,
   reconcileSteeredIdentity,
@@ -13176,6 +13176,12 @@ export function issueRoutes(
             eq(codingPodIssueBindings.ownerAgentId, existing.assigneeAgentId),
           )).limit(1)
         : [];
+      const [codingPodAcceptanceBinding] = existing.status === "in_review" && nextStatus === "done"
+        ? await db.select({ approvalStageId: codingPodIssueBindings.approvalStageId }).from(codingPodIssueBindings).where(and(
+            eq(codingPodIssueBindings.companyId, existing.companyId),
+            eq(codingPodIssueBindings.issueId, existing.id),
+          )).limit(1)
+        : [];
       if (codingPodReviewBinding) {
         const nextExecutionState = updateFields.executionState as Record<string, unknown> | undefined;
         if (nextExecutionState?.currentStageId !== codingPodReviewBinding.reviewStageId) {
@@ -13645,6 +13651,7 @@ export function issueRoutes(
         : undefined;
       const shouldUseTransactionalIssueUpdate =
         Boolean(codingPodReviewBinding) ||
+        Boolean(codingPodAcceptanceBinding) ||
         Boolean(commentAttachmentIds?.length) ||
         Boolean(decision) ||
         shouldRelayStop ||
@@ -13663,6 +13670,7 @@ export function issueRoutes(
                   lockedIssue.assigneeAgentId !== codingPodReviewBinding.ownerAgentId) {
                 throw conflict("Coding pod task changed while capturing its candidate");
               }
+              assertCodingPodReviewSourceUnchanged(existing, lockedIssue);
               codingPodSnapshot = await readCodingPodCandidateSnapshot(tx as unknown as Db, {
                 companyId: existing.companyId,
                 issueId: existing.id,
@@ -13674,11 +13682,11 @@ export function issueRoutes(
               !(await assertLockedReviewPolicyAllowsMutation(tx))
             )
               return null;
-            if (decision?.outcome === "approved") {
+            if (decision?.outcome === "approved" || codingPodAcceptanceBinding) {
               await assertCodingPodCandidateFreshForDecision(tx as unknown as Db, {
                 companyId: existing.companyId,
                 issueId: existing.id,
-                stageId: decision.stageId,
+                stageId: decision?.stageId ?? codingPodAcceptanceBinding!.approvalStageId,
               });
             }
             const updated = await updateIssue(tx);

@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { agents, codingPodCandidates, codingPodIssueBindings, codingPods, companies, createDb, executionWorkspaces, heartbeatRuns, issues, projects } from "@paperclipai/db";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
-import { insertCodingPodCandidate, readCodingPodCandidateSnapshot } from "../services/coding-pod-candidates.js";
+import { assertCodingPodReviewSourceUnchanged, insertCodingPodCandidate, readCodingPodCandidateSnapshot } from "../services/coding-pod-candidates.js";
 import { normalizeIssueExecutionPolicy } from "../services/issue-execution-policy.js";
 import { issueRoutes } from "../routes/issues.js";
 import { errorHandler } from "../middleware/error-handler.js";
@@ -30,6 +30,14 @@ vi.mock("../services/index.js", async (importOriginal) => {
 });
 
 describeDb("coding pod Git candidates", () => {
+  it("rejects a same-status policy or project edit before candidate capture", () => {
+    const original = { projectId: "project-1", executionPolicy: { stages: [{ id: "review-1" }] },
+      executionState: null, statusVersion: 2 };
+    expect(() => assertCodingPodReviewSourceUnchanged(original, { ...original, executionPolicy: { stages: [{ id: "review-2" }] } }))
+      .toThrow(/changed while capturing/);
+    expect(() => assertCodingPodReviewSourceUnchanged(original, { ...original, projectId: "project-2" }))
+      .toThrow(/changed while capturing/);
+  });
   let db: ReturnType<typeof createDb>;
   let database: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>>;
   const repos: string[] = [];

@@ -17,7 +17,7 @@ function comparisonUrl(repoUrl: string | null | undefined, baseSha: string, head
 }
 
 export function IssueCodingPodPanel({ view, loading, error, attachError, issueStatus, podConfigured, onAttach, attaching,
-  onDecide, deciding, companyPrefix, repoUrl, onOpenArtifacts }: {
+  onDecide, deciding, companyPrefix, repoUrl, onOpenArtifacts, canDecide = true }: {
   view: CodingPodIssueView | null;
   loading: boolean;
   error: string | null;
@@ -31,6 +31,7 @@ export function IssueCodingPodPanel({ view, loading, error, attachError, issueSt
   companyPrefix?: string | null;
   repoUrl?: string | null;
   onOpenArtifacts?: () => void;
+  canDecide?: boolean;
 }) {
   const [decisionComment, setDecisionComment] = useState("");
   const prefix = companyPrefix ? `/${encodeURIComponent(companyPrefix)}` : "";
@@ -71,7 +72,8 @@ export function IssueCodingPodPanel({ view, loading, error, attachError, issueSt
         </nav>
         {phase === "candidate_stale" ? <p role="alert" className="text-destructive">The source worktree changed after the candidate was captured. Return the task to the owner for a clean commit and a new review.</p> : null}
         {phase === "changes_requested" ? <p className="text-muted-foreground">The owner needs to address the review feedback and submit a new clean candidate.</p> : null}
-        {phase === "awaiting_board" ? <div className="flex flex-col gap-2">
+        {phase === "awaiting_board" && !canDecide ? <p className="text-muted-foreground">Waiting for the pinned board approver.</p> : null}
+        {phase === "awaiting_board" && canDecide ? <div className="flex flex-col gap-2">
           <label className="flex flex-col gap-2">Decision note
             <textarea className="min-h-16 rounded-md border border-input bg-background p-2 text-sm" value={decisionComment} onChange={(event) => setDecisionComment(event.target.value)} placeholder="Explain your decision" />
           </label>
