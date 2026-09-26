@@ -12,6 +12,7 @@ import { aiConnectionBindingSchema } from "@paperclipai/shared";
 import { executionBlockerPredicate, getExecutionBlocker } from "./execution-blocker.js";
 import { CONVERSATION_CONTINUATION_POLICY, claimedAdapterType, runUsedConversationAdapter, hasConversationContinuationPolicy, isConversationAdapter } from "./conversation-continuation.js";
 import { recordExecutionWait } from "./execution-wait.js";
+import { resolveCodingPodReviewerWorkspacePlan, selectCodingPodReviewerWorkspace } from "./coding-pod-candidates.js";
 import {
   legacyExecutionNeedsReconciliation,
   terminalizeLegacyExecution,
@@ -111,6 +112,7 @@ import {
   approvals,
   assets,
   chatActions,
+  codingPodCandidates,
   chatConversations,
   chatDeliveries,
   chatEndpoints,
@@ -20229,6 +20231,7 @@ export function heartbeatService(
         companyId: agent.companyId,
         agentId: agent.id,
         runId: run.id,
+        issueId: issueContext?.id ?? null,
         agent: {
           companyId: agent.companyId,
           permissions: agent.permissions,
@@ -20248,6 +20251,13 @@ export function heartbeatService(
           : null,
       });
       const trustPreset = retainedTrust.trustPreset;
+      const codingPodReviewerWorkspacePlan = issueContext && trustPreset.kind === "low_trust_review"
+        ? await resolveCodingPodReviewerWorkspacePlan(db, {
+            companyId: agent.companyId,
+            issueId: issueContext.id,
+            reviewerAgentId: agent.id,
+          })
+        : null;
       if (retainedTrust.executionPolicy !== undefined) {
         // Later launch-context writes must preserve the boundary already made
         // durable for authorization and operation-time credential resolution.
@@ -20289,8 +20299,8 @@ export function heartbeatService(
           issueAssigneeOverrides?.useProjectWorkspace ?? null,
       });
       const requestedExecutionWorkspaceMode =
-        trustPreset.kind === "low_trust_review" &&
-        resolvedExecutionWorkspaceMode === "shared_workspace"
+        codingPodReviewerWorkspacePlan ||
+        (trustPreset.kind === "low_trust_review" && resolvedExecutionWorkspaceMode === "shared_workspace")
           ? "isolated_workspace"
           : resolvedExecutionWorkspaceMode;
       const issueRef = issueContext
@@ -20567,9 +20577,13 @@ export function heartbeatService(
           : null;
       const persistedNativeExecutionWorkspaceId =
         persistedNativeExecutionInput?.binding.executionWorkspaceId ?? null;
-      const requestedExecutionWorkspaceId =
-        persistedNativeExecutionWorkspaceId ??
-        readNonEmptyString(issueRef?.executionWorkspaceId);
+      const codingPodWorkspaceSelection = selectCodingPodReviewerWorkspace(codingPodReviewerWorkspacePlan, {
+        persistedNativeWorkspaceId: persistedNativeExecutionWorkspaceId,
+        issueWorkspaceId: readNonEmptyString(issueRef?.executionWorkspaceId),
+        issuePreference: issueRef?.executionWorkspacePreference ?? null,
+        config: {},
+      });
+      const requestedExecutionWorkspaceId = codingPodWorkspaceSelection.requestedWorkspaceId;
       const existingExecutionWorkspace = requestedExecutionWorkspaceId
         ? await executionWorkspacesSvc.getById(requestedExecutionWorkspaceId)
         : null;
@@ -20583,7 +20597,7 @@ export function heartbeatService(
           issueExecutionWorkspaceId: requestedExecutionWorkspaceId,
           issueExecutionWorkspacePreference: nativeRecoveryExecutionWorkspaceId
             ? "reuse_existing"
-            : (issueRef?.executionWorkspacePreference ?? null),
+            : codingPodWorkspaceSelection.issuePreference,
           existingExecutionWorkspaceStatus:
             existingExecutionWorkspace?.status ?? null,
         });
@@ -21157,12 +21171,16 @@ export function heartbeatService(
             : workspace;
         },
       });
-      const hostExecutionWorkspaceConfig =
-        stripHostWorkspaceProvisionForLowTrustSandbox({
+      const hostExecutionWorkspaceConfig = selectCodingPodReviewerWorkspace(codingPodReviewerWorkspacePlan, {
+        persistedNativeWorkspaceId: persistedNativeExecutionWorkspaceId,
+        issueWorkspaceId: readNonEmptyString(issueRef?.executionWorkspaceId),
+        issuePreference: issueRef?.executionWorkspacePreference ?? null,
+        config: stripHostWorkspaceProvisionForLowTrustSandbox({
           config: mergedConfig,
           trustPreset,
           selectedEnvironmentDriver: lowTrustPreflightEnvironmentDriver,
-        });
+        }),
+      }).config;
       const executionWorkspaceBase = {
         baseCwd: resolvedWorkspace.cwd,
         source: resolvedWorkspace.source,
@@ -21425,7 +21443,7 @@ export function heartbeatService(
       const bindIssueToPersistedExecutionWorkspace = async (
         workspace: ExecutionWorkspace | null,
       ) => {
-        if (!issueId || !workspace || nativeRecoveryExecutionWorkspaceId) {
+        if (!issueId || !workspace || nativeRecoveryExecutionWorkspaceId || codingPodReviewerWorkspacePlan) {
           return;
         }
         const nextIssueWorkspaceMode =
@@ -21664,6 +21682,18 @@ export function heartbeatService(
       await workspaceOperationRecorder.attachExecutionWorkspaceId(
         persistedExecutionWorkspace?.id ?? null,
       );
+      if (codingPodReviewerWorkspacePlan && persistedExecutionWorkspace) {
+        if (persistedExecutionWorkspace.strategyType !== "git_worktree" ||
+            persistedExecutionWorkspace.baseRef !== codingPodReviewerWorkspacePlan.baseRef) {
+          throw conflict("Coding pod reviewer workspace was not pinned to the candidate commit");
+        }
+        const [boundCandidate] = await db.update(codingPodCandidates).set({ reviewWorkspaceId: persistedExecutionWorkspace.id }).where(and(
+          eq(codingPodCandidates.id, codingPodReviewerWorkspacePlan.candidateId),
+          eq(codingPodCandidates.companyId, agent.companyId),
+          or(isNull(codingPodCandidates.reviewWorkspaceId), eq(codingPodCandidates.reviewWorkspaceId, persistedExecutionWorkspace.id)),
+        )).returning({ id: codingPodCandidates.id });
+        if (!boundCandidate) throw conflict("Coding pod reviewer workspace changed during provisioning");
+      }
       await recordWorkspaceConfigFreshnessOperation({
         recorder: workspaceOperationRecorder,
         runId: run.id,

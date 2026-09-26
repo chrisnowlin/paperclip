@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { and, desc, eq } from "drizzle-orm";
-import { codingPodCandidates, executionWorkspaces, type Db } from "@paperclipai/db";
+import { and, desc, eq, sql } from "drizzle-orm";
+import { codingPodCandidates, codingPodIssueBindings, executionWorkspaces, issues, type Db } from "@paperclipai/db";
 import type { CodingPodCandidate } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 
@@ -11,6 +11,106 @@ export interface CodingPodGitSnapshot {
   workspaceId: string;
   baseSha: string;
   headSha: string;
+}
+
+export async function resolveCodingPodReviewerWorkspacePlan(
+  db: Db,
+  input: { companyId: string; issueId: string; reviewerAgentId: string },
+): Promise<{ candidateId: string; ownerWorkspaceId: string; reviewWorkspaceId: string | null; baseRef: string } | null> {
+  const [issue] = await db.select({
+    assigneeAgentId: issues.assigneeAgentId,
+    executionState: issues.executionState,
+  }).from(issues).where(and(eq(issues.id, input.issueId), eq(issues.companyId, input.companyId))).limit(1);
+  const [binding] = issue
+    ? await db.select().from(codingPodIssueBindings).where(and(
+        eq(codingPodIssueBindings.companyId, input.companyId),
+        eq(codingPodIssueBindings.issueId, input.issueId),
+        eq(codingPodIssueBindings.reviewerAgentId, input.reviewerAgentId),
+      )).limit(1)
+    : [];
+  const state = issue?.executionState as Record<string, unknown> | null;
+  const participant = state?.currentParticipant as Record<string, unknown> | null;
+  if (!issue || !binding || issue.assigneeAgentId !== input.reviewerAgentId ||
+      state?.status !== "pending" || state.currentStageId !== binding.reviewStageId ||
+      participant?.type !== "agent" || participant.agentId !== input.reviewerAgentId) return null;
+  const [candidate] = await db.select().from(codingPodCandidates).where(and(
+    eq(codingPodCandidates.companyId, input.companyId),
+    eq(codingPodCandidates.issueId, input.issueId),
+    eq(codingPodCandidates.reviewStageId, binding.reviewStageId),
+  )).orderBy(desc(codingPodCandidates.entryStatusVersion)).limit(1);
+  if (!candidate) throw conflict("Coding pod reviewer cannot run without a fixed candidate");
+  return {
+    candidateId: candidate.id,
+    ownerWorkspaceId: candidate.workspaceId,
+    reviewWorkspaceId: candidate.reviewWorkspaceId,
+    baseRef: candidate.headSha,
+  };
+}
+
+export async function assertCodingPodCandidateFreshForDecision(
+  db: Db,
+  input: { companyId: string; issueId: string; stageId: string },
+): Promise<void> {
+  const [binding] = await db.select().from(codingPodIssueBindings).where(and(
+    eq(codingPodIssueBindings.companyId, input.companyId),
+    eq(codingPodIssueBindings.issueId, input.issueId),
+  )).limit(1);
+  if (!binding || (input.stageId !== binding.reviewStageId && input.stageId !== binding.approvalStageId)) return;
+  const [candidate] = await db.select().from(codingPodCandidates).where(and(
+    eq(codingPodCandidates.companyId, input.companyId),
+    eq(codingPodCandidates.issueId, input.issueId),
+    eq(codingPodCandidates.reviewStageId, binding.reviewStageId),
+  )).orderBy(desc(codingPodCandidates.entryStatusVersion)).limit(1);
+  if (!candidate) throw conflict("Coding pod approval requires a reviewed Git candidate");
+  await db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`execution_workspace_lifecycle:${candidate.workspaceId}`}, 0))`);
+  let fresh: CodingPodGitSnapshot;
+  try {
+    fresh = await readCodingPodCandidateSnapshot(db, {
+      companyId: input.companyId, issueId: input.issueId, workspaceId: candidate.workspaceId,
+    });
+  } catch {
+    throw conflict("Coding pod candidate changed; return it to the owner for a new review");
+  }
+  if (fresh.baseSha !== candidate.baseSha || fresh.headSha !== candidate.headSha) {
+    throw conflict("Coding pod candidate changed; return it to the owner for a new review");
+  }
+}
+
+export function selectCodingPodReviewerWorkspace(
+  plan: { candidateId: string; ownerWorkspaceId: string; reviewWorkspaceId: string | null; baseRef: string } | null,
+  input: {
+    persistedNativeWorkspaceId: string | null;
+    issueWorkspaceId: string | null;
+    issuePreference: string | null;
+    config: Record<string, unknown>;
+  },
+) {
+  if (plan) {
+    if (input.persistedNativeWorkspaceId === plan.ownerWorkspaceId ||
+        (plan.reviewWorkspaceId && input.persistedNativeWorkspaceId && input.persistedNativeWorkspaceId !== plan.reviewWorkspaceId)) {
+      throw conflict("Coding pod reviewer cannot resume in the owner's workspace");
+    }
+    const reuseWorkspaceId = input.persistedNativeWorkspaceId ?? plan.reviewWorkspaceId;
+    return {
+      requestedWorkspaceId: reuseWorkspaceId ?? null,
+      issuePreference: reuseWorkspaceId ? "reuse_existing" : null,
+      config: {
+        ...input.config,
+        workspaceStrategy: {
+          ...(input.config.workspaceStrategy && typeof input.config.workspaceStrategy === "object"
+            ? input.config.workspaceStrategy : {}),
+          type: "git_worktree",
+          baseRef: plan.baseRef,
+          branchTemplate: `coding-pod-review/{{issue.identifier}}-${plan.candidateId.slice(0, 8)}`,
+        },
+      },
+    };
+  }
+  return {
+    requestedWorkspaceId: input.persistedNativeWorkspaceId ?? input.issueWorkspaceId,
+    issuePreference: input.issuePreference,
+    config: input.config,
+  };
 }
 
 export async function insertCodingPodCandidate(

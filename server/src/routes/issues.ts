@@ -6,7 +6,7 @@ import {
   validateExecutionReconciliation,
   markExecutionReconciliation,
 } from "../services/execution-recovery-resolution.js";
-import { insertCodingPodCandidate, readCodingPodCandidateSnapshot } from "../services/coding-pod-candidates.js";
+import { assertCodingPodCandidateFreshForDecision, insertCodingPodCandidate, readCodingPodCandidateSnapshot } from "../services/coding-pod-candidates.js";
 import {
   storedSteeringAcknowledgement,
   reconcileSteeredIdentity,
@@ -9392,6 +9392,13 @@ export function issueRoutes(
             });
             Object.assign(updateFields, transition.patch);
             if (transition.decision) {
+              if (transition.decision.outcome === "approved") {
+                await assertCodingPodCandidateFreshForDecision(tx as unknown as Db, {
+                  companyId: lockedIssue.companyId,
+                  issueId: lockedIssue.id,
+                  stageId: transition.decision.stageId,
+                });
+              }
               const decisionId = randomUUID();
               const nextExecutionState = updateFields.executionState;
               if (
@@ -13667,6 +13674,13 @@ export function issueRoutes(
               !(await assertLockedReviewPolicyAllowsMutation(tx))
             )
               return null;
+            if (decision?.outcome === "approved") {
+              await assertCodingPodCandidateFreshForDecision(tx as unknown as Db, {
+                companyId: existing.companyId,
+                issueId: existing.id,
+                stageId: decision.stageId,
+              });
+            }
             const updated = await updateIssue(tx);
             if (!updated) return null;
             if (codingPodReviewBinding && codingPodSnapshot) {
@@ -17659,6 +17673,13 @@ export function issueRoutes(
         const postCommitIssueActions: IssuePostCommitAction[] = [];
         try {
           txResult = await db.transaction(async (tx) => {
+            if (transition.decision?.outcome === "approved") {
+              await assertCodingPodCandidateFreshForDecision(tx as unknown as Db, {
+                companyId: currentIssue.companyId,
+                issueId: currentIssue.id,
+                stageId: transition.decision.stageId,
+              });
+            }
             const insertedComment = await svc.addComment(
               id,
               req.body.body,
