@@ -33,6 +33,49 @@ function context(root: string) {
 }
 
 describe("direct LM Studio Splash heartbeat", () => {
+  it("serializes two agents through one model slot and reports the wait", async () => {
+    const root = await workspace();
+    let releaseFirst!: () => void;
+    let startedFirst!: () => void;
+    const firstTurnHeld = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const firstTurnStarted = new Promise<void>((resolve) => { startedFirst = resolve; });
+    let modelProbes = 0;
+    let completions = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/models")) { modelProbes += 1; return new Response(JSON.stringify(models)); }
+      completions += 1;
+      if (completions === 1) { startedFirst(); await firstTurnHeld; }
+      return new Response(JSON.stringify(finalTurn));
+    }));
+    const progress: string[] = [];
+    const dispatches: string[] = [];
+    const cancellationReady: string[] = [];
+    const run = (runId: string) => execute({
+      runId, agent: { id: runId, companyId: "company-1", name: "Local", adapterType: "lmstudio_splash_local", adapterConfig: {} },
+      runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+      config: { cwd: root }, context: context(root), authToken: "run-token",
+      onLog: async () => {}, onRuntimeProgress: async (update) => { progress.push(update.message); },
+      onCancellationReady: async () => { cancellationReady.push(runId); },
+      onDispatch: () => { dispatches.push(runId); },
+    });
+    const first = run("run-first");
+    await firstTurnStarted;
+    const second = run("run-second");
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(modelProbes).toBe(1);
+      expect(completions).toBe(1);
+      expect(dispatches).toEqual(["run-first"]);
+      expect(cancellationReady).toEqual(["run-first", "run-second"]);
+      expect(progress).toContain("Queued for the local Splash model (joined at position 1).");
+    } finally { releaseFirst(); }
+    await Promise.all([first, second]);
+    expect(modelProbes).toBe(2);
+    expect(completions).toBe(2);
+    expect(dispatches).toEqual(["run-first", "run-second"]);
+    expect(progress.filter((message) => message === "Local Splash model slot acquired.")).toHaveLength(2);
+  });
+
   it("accepts controller-owned scratch and Git environment but rejects paid provider keys", () => {
     expect(assertLmStudioSplashConfig({ env: {
       PAPERCLIP_RUN_SCRATCH_DIR: "/tmp/run", TMPDIR: "/tmp/run", GIT_CONFIG_NOSYSTEM: "1",

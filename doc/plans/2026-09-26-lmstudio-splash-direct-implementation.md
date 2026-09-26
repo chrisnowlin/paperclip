@@ -66,3 +66,13 @@
 - [x] Implement setup and pod validation; run focused tests and Swift build/tests.
 - [x] Run token gates, repository typecheck, focused tests, Swift tests, and repository build. The full `pnpm test:run` gate was attempted and stopped after existing OpenAI AI Connection tests failed because their project-auth scan sees the host's ancestor `~/.codex/config.toml`. The full suite remains unverified from this worktree; AI Connection runtime code was not changed.
 - [x] Commit and report the remaining live qualification: explicit LM Studio load, disposable agent task, delegation, Stop, and V1/V2 isolation.
+
+### Task 5: Single-instance run admission
+
+**Files:** `packages/adapters/lmstudio-splash-local/src/server/run-queue.ts`, adapter execution and tests, V2 setup, and operator docs.
+
+**Decision:** One active Splash run and three FIFO waiters per V2 server process. A waiter remains cancellable and times out after ten minutes; a full queue fails clearly. The slot covers the whole run, including workspace commands, and releases in `finally`. Other LM Studio clients cannot be controlled by Paperclip.
+
+- [x] Write failing tests for FIFO handoff, waiting cancellation, queue capacity, timeout, and two concurrent adapter invocations.
+- [x] Implement the bounded queue and show waiting status through the existing runtime progress path.
+- [x] Run focused verification, commit, and update the branch. Adapter tests, Swift tests and release build, repository typecheck, and repository build passed; the pre-existing full-suite worktree limitation remains documented above.

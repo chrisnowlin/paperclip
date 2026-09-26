@@ -474,11 +474,12 @@ final class LocalAgentSetupController: NSObject {
         let workspace = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("\(dataDirectoryName)/agent-workspaces/\(String(safeName))")
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
-        var config: [String: Any] = ["cwd": workspace.path, "timeoutSec": 180]
+        var config: [String: Any] = ["cwd": workspace.path]
         if provider == .lmStudioSplash {
             config["model"] = LmStudioSplashReadiness.model
             return config
         }
+        config["timeoutSec"] = 180
         config["command"] = command
         if provider != .opencode { config["engine"] = "cli" }
         let chosenModel = model.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
