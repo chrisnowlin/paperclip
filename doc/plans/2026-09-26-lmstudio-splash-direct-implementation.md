@@ -34,7 +34,7 @@
 
 - [x] Write tests for loaded/unloaded/wrong-format model, unavailable endpoint, malformed completion, tool call and usage parsing, and no alternate host/model.
 - [x] Run the focused test and confirm failures, implement the two functions, rerun green.
-- [ ] Commit the model route.
+- [x] Commit the model route.
 
 ### Task 2: Local coding and task tools
 
@@ -42,8 +42,8 @@
 
 **Interfaces:** `createLmStudioToolExecutor({workspace,companyId,runId,authToken,apiUrl,signal,onSpawn})` exposes fixed JSON tool definitions and `execute(call)`. File paths stay within workspace; commands use fixed cwd and bounded argv/time/output; Paperclip requests use a company/task allowlist and run headers.
 
-- [ ] Write failing tests for file read/write/list, path and symlink escape, command bounds/cancellation, company path rejection, JWT never in model output, and mutation retry behavior.
-- [ ] Implement the smallest tool executor using existing adapter process helpers and server route authority; rerun focused tests.
+- [x] Write failing tests for file read/write/list, path and symlink escape, command bounds/cancellation, company path rejection, JWT never in model output, and mutation retry behavior.
+- [x] Implement the bounded local tool executor against the existing Paperclip API authority; rerun focused tests.
 - [ ] Commit the tool boundary.
 
 ### Task 3: Heartbeat loop and adapter registration

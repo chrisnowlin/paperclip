@@ -1,0 +1,124 @@
+import { mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createLmStudioToolExecutor } from "./tools.js";
+
+const roots: string[] = [];
+afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
+async function workspace() {
+  const root = await mkdtemp(path.join(os.tmpdir(), "paperclip-lmstudio-tools-"));
+  roots.push(root);
+  return root;
+}
+const call = (name: string, args: Record<string, unknown>) => ({ id: `call-${name}`, name, arguments: args });
+
+describe("Paperclip-owned LM Studio coding tools", () => {
+  it("lists, reads, and atomically writes files inside the selected workspace", async () => {
+    const root = await workspace();
+    await writeFile(path.join(root, "README.md"), "Before\n");
+    const tools = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-1",
+      authToken: "run-token", apiUrl: "http://127.0.0.1:3319" });
+    expect(tools.definitions.map((tool) => tool.function.name)).toEqual([
+      "list_files", "read_file", "write_file", "run_command", "paperclip_request",
+    ]);
+    expect(await tools.execute(call("list_files", { path: "." }))).toContain("README.md");
+    expect(await tools.execute(call("read_file", { path: "README.md" }))).toBe("Before\n");
+    await tools.execute(call("write_file", { path: "README.md", content: "After\n" }));
+    expect(await readFile(path.join(root, "README.md"), "utf8")).toBe("After\n");
+    await tools.execute(call("write_file", { path: "README.md", content: "" }));
+    expect(await readFile(path.join(root, "README.md"), "utf8")).toBe("");
+  });
+
+  it("rejects traversal and symlink escapes before reading or writing", async () => {
+    const root = await workspace();
+    const outside = await workspace();
+    await writeFile(path.join(outside, "secret.txt"), "outside");
+    await symlink(outside, path.join(root, "escape"));
+    const tools = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-1",
+      authToken: "run-token", apiUrl: "http://127.0.0.1:3319" });
+    await expect(tools.execute(call("read_file", { path: "../secret.txt" }))).rejects.toThrow("workspace");
+    await expect(tools.execute(call("read_file", { path: "escape/secret.txt" }))).rejects.toThrow("workspace");
+    await expect(tools.execute(call("write_file", { path: "escape/new.txt", content: "bad" }))).rejects.toThrow("workspace");
+    expect(await readFile(path.join(outside, "secret.txt"), "utf8")).toBe("outside");
+  });
+
+  it("runs argv commands in the selected workspace with a timeout and no inherited paid key", async () => {
+    const root = await workspace();
+    vi.stubEnv("OPENAI_API_KEY", "paid-fixture-key");
+    const spawn = vi.fn(async () => {});
+    try {
+      const tools = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-1",
+        authToken: "run-token", apiUrl: "http://127.0.0.1:3319", onSpawn: spawn });
+      const result = await tools.execute(call("run_command", { command: "node", args: ["-e",
+        "process.stdout.write(JSON.stringify({cwd:process.cwd(),key:process.env.OPENAI_API_KEY||null,token:process.env.PAPERCLIP_API_KEY||null}))"], timeoutMs: 5_000 }));
+      expect(JSON.parse(result)).toEqual({ cwd: await realpath(root), key: null, token: null });
+      expect(spawn).toHaveBeenCalledOnce();
+      await expect(tools.execute(call("run_command", { command: "node", args: ["-e", "setTimeout(()=>{},1000)"], timeoutMs: 30 }))).rejects.toThrow("timed out");
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it("settles a fast command even when process registration finishes later", async () => {
+    const root = await workspace();
+    const tools = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-1",
+      authToken: "run-token", apiUrl: "http://127.0.0.1:3319",
+      onSpawn: async () => { await new Promise((resolve) => setTimeout(resolve, 80)); } });
+    const result = await Promise.race([
+      tools.execute(call("run_command", { command: "node", args: ["-e", "process.stdout.write('done')"], timeoutMs: 500 })),
+      new Promise<string>((_, reject) => setTimeout(() => reject(new Error("command did not settle")), 300)),
+    ]);
+    expect(result).toBe("done");
+  });
+
+  it("aborts an active command when the run is cancelled", async () => {
+    const root = await workspace();
+    const controller = new AbortController();
+    const tools = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-1",
+      authToken: "run-token", apiUrl: "http://127.0.0.1:3319", signal: controller.signal });
+    const pending = tools.execute(call("run_command", { command: "node", args: ["-e", "setTimeout(()=>{},1000)"], timeoutMs: 5_000 }));
+    setTimeout(() => controller.abort(), 25);
+    await expect(pending).rejects.toThrow("cancelled");
+  });
+
+  it("reaps a command that ignores the first termination signal", async () => {
+    const root = await workspace();
+    const tools = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-1",
+      authToken: "run-token", apiUrl: "http://127.0.0.1:3319" });
+    const started = Date.now();
+    await expect(tools.execute(call("run_command", { command: "node", args: ["-e",
+      "process.on('SIGTERM',()=>setTimeout(()=>process.exit(0),1200));setInterval(()=>{},1000)"], timeoutMs: 200 }))).rejects.toThrow("timed out");
+    expect(Date.now() - started).toBeLessThan(900);
+  });
+
+  it("sends only allowed company task requests with the run JWT kept out of results", async () => {
+    const root = await workspace();
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ id: "issue-1" }), { status: 200 }));
+    const tools = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-1",
+      authToken: "private-run-token", apiUrl: "http://127.0.0.1:3319", fetcher });
+    const result = await tools.execute(call("paperclip_request", { method: "GET", path: "/api/companies/company-1/issues/issue-1" }));
+    expect(result).toContain("issue-1");
+    expect(result).not.toContain("private-run-token");
+    expect(fetcher).toHaveBeenCalledWith("http://127.0.0.1:3319/api/companies/company-1/issues/issue-1", expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: "Bearer private-run-token" }),
+      redirect: "error",
+    }));
+    await expect(tools.execute(call("paperclip_request", { method: "GET", path: "/api/companies/company-2/issues" }))).rejects.toThrow("company");
+    await expect(tools.execute(call("paperclip_request", { method: "GET", path: "http://example.com/api/companies/company-1/issues" }))).rejects.toThrow("path");
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it("requires task-create idempotency and never retries an uncertain mutation", async () => {
+    const root = await workspace();
+    const fetcher = vi.fn<typeof fetch>().mockRejectedValue(new Error("connection lost"));
+    const tools = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-1",
+      authToken: "run-token", apiUrl: "http://127.0.0.1:3319", fetcher });
+    await expect(tools.execute(call("paperclip_request", { method: "POST", path: "/api/companies/company-1/issues", body: { title: "Child" } }))).rejects.toThrow("idempotency");
+    expect(fetcher).not.toHaveBeenCalled();
+    await expect(tools.execute(call("paperclip_request", { method: "POST", path: "/api/companies/company-1/issues", body: {
+      title: "Child", idempotencyKey: "child-1",
+    } }))).rejects.toThrow("uncertain");
+    expect(fetcher).toHaveBeenCalledOnce();
+    const headers = fetcher.mock.calls[0]?.[1]?.headers as Record<string, string>;
+    expect(headers["X-Paperclip-Run-Id"]).toBe("run-1");
+  });
+});
