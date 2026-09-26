@@ -8,8 +8,14 @@ export function assertLmStudioSplashConfig(config: Record<string, unknown>): num
     "apiKey", "aiConnection", "managedAiConnection", "OPENAI_API_KEY", "CODEX_HOME"]) {
     if (config[key] !== undefined) throw new Error("LM Studio Splash cannot use an AI Connection, credential, endpoint, or command override.");
   }
-  if (config.env && (typeof config.env !== "object" || Array.isArray(config.env) || Object.keys(config.env).length > 0)) {
-    throw new Error("LM Studio Splash cannot inherit provider environment overrides.");
+  if (config.env !== undefined) {
+    if (typeof config.env !== "object" || config.env === null || Array.isArray(config.env)) {
+      throw new Error("LM Studio Splash provider environment is invalid.");
+    }
+    const env = config.env as Record<string, unknown>;
+    if (Object.keys(env).some((key) => /^(?:ANTHROPIC_|CLAUDE_|OPENAI_|CODEX_|OPENROUTER_|XAI_|GROK_|LMSTUDIO_)/.test(key))) {
+      throw new Error("LM Studio Splash cannot inherit a paid provider environment override.");
+    }
   }
   const steps = config.maxSteps ?? 20;
   if (typeof steps !== "number" || !Number.isInteger(steps) || steps < 1 || steps > 24) {

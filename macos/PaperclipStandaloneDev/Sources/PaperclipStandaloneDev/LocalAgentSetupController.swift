@@ -4,13 +4,14 @@ import Foundation
 @MainActor
 final class LocalAgentSetupController: NSObject {
     enum Provider: Int, CaseIterable {
-        case claude, codex, opencode
+        case claude, codex, opencode, lmStudioSplash
 
         var title: String {
             switch self {
             case .claude: "Claude Code"
             case .codex: "Codex"
             case .opencode: "OpenCode"
+            case .lmStudioSplash: "LM Studio Splash"
             }
         }
 
@@ -19,6 +20,7 @@ final class LocalAgentSetupController: NSObject {
             case .claude: "claude_local"
             case .codex: "codex_local"
             case .opencode: "opencode_local"
+            case .lmStudioSplash: "lmstudio_splash_local"
             }
         }
 
@@ -27,6 +29,7 @@ final class LocalAgentSetupController: NSObject {
             case .claude: "claude"
             case .codex: "codex"
             case .opencode: "opencode"
+            case .lmStudioSplash: "LM Studio"
             }
         }
 
@@ -34,6 +37,7 @@ final class LocalAgentSetupController: NSObject {
             switch self {
             case .claude, .codex: ""
             case .opencode: ""
+            case .lmStudioSplash: LmStudioSplashReadiness.model
             }
         }
     }
@@ -114,7 +118,7 @@ final class LocalAgentSetupController: NSObject {
         let heading = NSTextField(labelWithString: "Set up a local agent")
         heading.font = .boldSystemFont(ofSize: 25)
         root.addArrangedSubview(heading)
-        let intro = label("Use the Claude Code, Codex, or OpenCode sign-in already on this Mac. Choose a provider, test it in Paperclip, then add an agent. No terminal commands are needed.")
+        let intro = label("Choose an agent runtime, test it in Paperclip, then add an agent. LM Studio Splash uses the local loaded model without a provider sign-in.")
         intro.textColor = .secondaryLabelColor
         root.addArrangedSubview(intro)
 
@@ -210,22 +214,48 @@ final class LocalAgentSetupController: NSObject {
             button.state = index == selectedProvider.rawValue ? .on : .off
         }
         let isOpenCode = selectedProvider == .opencode
+        let isLmStudioSplash = selectedProvider == .lmStudioSplash
         openCodeProviderHint.isHidden = !isOpenCode
         openCodeProviderPopup.isHidden = !isOpenCode
         model.removeAllItems()
         model.stringValue = selectedProvider.suggestedModel
-        modelHint.stringValue = selectedProvider == .opencode
-            ? "Model (choose one or enter a provider/model ID)"
+        model.isEditable = !isLmStudioSplash
+        modelHint.stringValue = isLmStudioSplash ? "Fixed model — load Qwen3.8 27B Splash in LM Studio before testing"
+            : selectedProvider == .opencode ? "Model (choose one or enter a provider/model ID)"
             : "Model (blank uses your CLI default)"
         let command = executable(for: selectedProvider)
         status.stringValue = command == nil
             ? "\(selectedProvider.commandName) was not found on this Mac."
             : isOpenCode ? "Loading your connected OpenCode providers…"
+                : isLmStudioSplash ? "Checking whether LM Studio has the Splash model loaded…"
                 : "\(selectedProvider.commandName) found. Test the connection in Paperclip."
         status.textColor = command == nil ? .systemRed : .secondaryLabelColor
         testButton.isEnabled = command != nil && !busy && !isOpenCode
         createButton.isEnabled = command != nil && !busy && !isOpenCode
         if isOpenCode, let command { discoverOpenCodeProviders(command: command) }
+        if isLmStudioSplash {
+            Task {
+                let readiness = await LmStudioSplashReadiness.check()
+                guard selectedProvider == .lmStudioSplash else { return }
+                switch readiness {
+                case .loaded:
+                    status.stringValue = "LM Studio Splash is loaded. Test its Paperclip route."
+                    status.textColor = .secondaryLabelColor
+                case .unloaded:
+                    status.stringValue = "Splash is available but not loaded in LM Studio. Load it before running the agent."
+                    status.textColor = .systemOrange
+                case .missing:
+                    status.stringValue = "The exact Qwen3.8 27B Splash model is missing from LM Studio."
+                    status.textColor = .systemOrange
+                case .wrongFormat:
+                    status.stringValue = "The matching LM Studio model is not in Splash format."
+                    status.textColor = .systemRed
+                case .unavailable:
+                    status.stringValue = "LM Studio is unavailable at 127.0.0.1:1234. Start its local server, then test again."
+                    status.textColor = .systemRed
+                }
+            }
+        }
     }
 
     private func discoverOpenCodeProviders(command: String) {
@@ -323,6 +353,7 @@ final class LocalAgentSetupController: NSObject {
     }
 
     private func executable(for provider: Provider) -> String? {
+        if provider == .lmStudioSplash { return "LM Studio" }
         let home = FileManager.default.homeDirectoryForCurrentUser
         var dirs = [home.appendingPathComponent(".local/bin"),
                     home.appendingPathComponent(".opencode/bin"),
@@ -443,7 +474,12 @@ final class LocalAgentSetupController: NSObject {
         let workspace = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("\(dataDirectoryName)/agent-workspaces/\(String(safeName))")
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
-        var config: [String: Any] = ["cwd": workspace.path, "command": command, "timeoutSec": 180]
+        var config: [String: Any] = ["cwd": workspace.path, "timeoutSec": 180]
+        if provider == .lmStudioSplash {
+            config["model"] = LmStudioSplashReadiness.model
+            return config
+        }
+        config["command"] = command
         if provider != .opencode { config["engine"] = "cli" }
         let chosenModel = model.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if provider == .opencode {

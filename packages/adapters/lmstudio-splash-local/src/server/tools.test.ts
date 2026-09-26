@@ -90,21 +90,54 @@ describe("Paperclip-owned LM Studio coding tools", () => {
     expect(Date.now() - started).toBeLessThan(900);
   });
 
+  it("reaps a descendant even when its command parent exits on timeout", async () => {
+    const root = await workspace();
+    let processGroup = 0;
+    const tools = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-1",
+      authToken: "run-token", apiUrl: "http://127.0.0.1:3319",
+      onSpawn: async ({ processGroupId }) => { processGroup = processGroupId ?? 0; } });
+    const code = `const {spawn}=require('node:child_process');spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"],{stdio:'ignore'});process.on('SIGTERM',()=>process.exit(0));setInterval(()=>{},1000)`;
+    try {
+      await expect(tools.execute(call("run_command", { command: "node", args: ["-e", code], timeoutMs: 200 }))).rejects.toThrow("timed out");
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(() => process.kill(-processGroup, 0)).toThrow();
+    } finally {
+      if (processGroup) { try { process.kill(-processGroup, "SIGKILL"); } catch { /* already gone */ } }
+    }
+  });
+
   it("sends only allowed company task requests with the run JWT kept out of results", async () => {
     const root = await workspace();
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ id: "issue-1" }), { status: 200 }));
     const tools = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-1",
       authToken: "private-run-token", apiUrl: "http://127.0.0.1:3319", fetcher });
-    const result = await tools.execute(call("paperclip_request", { method: "GET", path: "/api/companies/company-1/issues/issue-1" }));
+    const result = await tools.execute(call("paperclip_request", { method: "GET", path: "/api/companies/company-1/issues" }));
     expect(result).toContain("issue-1");
     expect(result).not.toContain("private-run-token");
-    expect(fetcher).toHaveBeenCalledWith("http://127.0.0.1:3319/api/companies/company-1/issues/issue-1", expect.objectContaining({
+    expect(fetcher).toHaveBeenCalledWith("http://127.0.0.1:3319/api/companies/company-1/issues", expect.objectContaining({
       headers: expect.objectContaining({ Authorization: "Bearer private-run-token" }),
       redirect: "error",
     }));
     await expect(tools.execute(call("paperclip_request", { method: "GET", path: "/api/companies/company-2/issues" }))).rejects.toThrow("company");
     await expect(tools.execute(call("paperclip_request", { method: "GET", path: "http://example.com/api/companies/company-1/issues" }))).rejects.toThrow("path");
     expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it("uses Paperclip's actual issue detail and comment routes under run authorization", async () => {
+    const root = await workspace();
+    const issueId = "11111111-1111-4111-8111-111111111111";
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", { status: 200 }));
+    const tools = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-1",
+      authToken: "run-token", apiUrl: "http://127.0.0.1:3319", fetcher });
+    await tools.execute(call("paperclip_request", { method: "GET", path: `/api/issues/${issueId}` }));
+    await tools.execute(call("paperclip_request", { method: "PATCH", path: `/api/issues/${issueId}`, body: { status: "in_progress" } }));
+    await tools.execute(call("paperclip_request", { method: "POST", path: `/api/issues/${issueId}/comments`, body: { body: "Update" } }));
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      `http://127.0.0.1:3319/api/issues/${issueId}`,
+      `http://127.0.0.1:3319/api/issues/${issueId}`,
+      `http://127.0.0.1:3319/api/issues/${issueId}/comments`,
+    ]);
+    await expect(tools.execute(call("paperclip_request", { method: "GET", path: `/api/issues/${issueId}/documents` }))).rejects.toThrow("allowed");
   });
 
   it("requires task-create idempotency and never retries an uncertain mutation", async () => {
@@ -127,7 +160,19 @@ describe("Paperclip-owned LM Studio coding tools", () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("Internal error", { status: 500 }));
     const tools = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-1",
       authToken: "run-token", apiUrl: "http://127.0.0.1:3319", fetcher });
-    await expect(tools.execute(call("paperclip_request", { method: "PATCH", path: "/api/companies/company-1/issues/issue-1",
+    await expect(tools.execute(call("paperclip_request", { method: "PATCH", path: "/api/issues/11111111-1111-4111-8111-111111111111",
+      body: { status: "done" } }))).rejects.toThrow("uncertain");
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it("treats a lost mutation response body as uncertain", async () => {
+    const root = await workspace();
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(new ReadableStream({
+      start(controller) { controller.error(new Error("response lost")); },
+    }), { status: 200 }));
+    const tools = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-1",
+      authToken: "run-token", apiUrl: "http://127.0.0.1:3319", fetcher });
+    await expect(tools.execute(call("paperclip_request", { method: "PATCH", path: "/api/issues/11111111-1111-4111-8111-111111111111",
       body: { status: "done" } }))).rejects.toThrow("uncertain");
     expect(fetcher).toHaveBeenCalledOnce();
   });

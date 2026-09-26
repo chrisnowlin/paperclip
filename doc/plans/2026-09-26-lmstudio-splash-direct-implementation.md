@@ -48,13 +48,13 @@
 
 ### Task 3: Heartbeat loop and adapter registration
 
-**Files:** Create `packages/adapters/lmstudio-splash-local/src/server/execute.ts`, `test.ts`, `session.ts`, UI and CLI parsers; register in `server/src/adapters/registry.ts`, `server/src/adapters/builtin-adapter-types.ts`, UI/CLI registries, workspace/package manifests, and local environment support.
+**Files:** Create `packages/adapters/lmstudio-splash-local/src/server/execute.ts`, `test.ts`, UI and CLI parsers; register in `server/src/adapters/registry.ts`, `server/src/adapters/builtin-adapter-types.ts`, UI/CLI registries, workspace/package manifests, and local environment support. No `session.ts` is needed because each run is stateless.
 
 **Interfaces:** `execute(ctx)` builds the Paperclip wake prompt, runs a bounded model/tool loop, emits redacted progress and usage, handles Stop, and returns a normal `AdapterExecutionResult` without a claimed cross-heartbeat session. `testEnvironment(ctx)` checks readiness without inference.
 
 - [x] Write failing adapter tests for delegated assignment, comment wake, multi-tool cycle, final response, cancellation, limits, and no paid fallback.
 - [x] Implement the loop and register the adapter across server/UI/CLI; run focused tests and targeted typechecks.
-- [ ] Commit the adapter integration.
+- [x] Commit the adapter integration.
 
 ### Task 4: V2 setup and pod qualification
 
@@ -62,6 +62,7 @@
 
 **Interfaces:** Native setup offers direct LM Studio Splash without sign-in. A project pod accepts it as local owner and rejects it as sandboxed reviewer. Pod attachment keeps the existing task-to-agent/account audit.
 
-- [ ] Write failing Swift and pod tests for setup/readiness and owner/reviewer selection.
-- [ ] Implement setup and pod validation; run focused tests, Swift build/tests, token gates, repository typecheck, tests, and build.
-- [ ] Commit and report the remaining live qualification: explicit LM Studio load, disposable agent task, delegation, Stop, and V1/V2 isolation.
+- [x] Write failing Swift and pod tests for setup/readiness and owner/reviewer selection.
+- [x] Implement setup and pod validation; run focused tests and Swift build/tests.
+- [x] Run token gates, repository typecheck, focused tests, Swift tests, and repository build. The full `pnpm test:run` gate was attempted from the managed worktree; existing OpenAI AI Connection tests fail because their project-auth scan sees the host's ancestor `~/.codex/config.toml`. This is an environmental failure, not a change to AI Connection runtime code.
+- [x] Commit and report the remaining live qualification: explicit LM Studio load, disposable agent task, delegation, Stop, and V1/V2 isolation.

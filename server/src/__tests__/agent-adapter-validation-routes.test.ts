@@ -412,6 +412,23 @@ describe("agent routes adapter validation", () => {
     expect(env.CODEX_HOME).toBeUndefined();
   });
 
+  it("clears a paid AI Connection when switching an agent to direct local Splash", async () => {
+    const existing = await mockAgentService.getById();
+    mockAgentService.getById.mockResolvedValue({ ...existing,
+      adapterConfig: { env: { OPENAI_API_KEY: { type: "plain", value: "paid-fixture-key" } } },
+      runtimeConfig: { aiConnection: { provider: "openai", method: "api_key", mode: "responsible_user" } },
+    });
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+      .send({ adapterType: "lmstudio_splash_local", replaceAdapterConfig: true,
+        adapterConfig: { model: "qwen3.8-27b-splash" }, runtimeConfig: {} }));
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const patch = mockAgentService.update.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    expect(patch.runtimeConfig).not.toHaveProperty("aiConnection");
+    expect(patch.adapterConfig).not.toHaveProperty("env");
+  });
+
   it("forwards a claude_local→process adapter move that drops the OAuth binding to the service unchanged", async () => {
     // The agent has the fixed Claude Code OAuth binding on the claude_local
     // adapter. A PATCH moves the agent to the process adapter and sends an empty

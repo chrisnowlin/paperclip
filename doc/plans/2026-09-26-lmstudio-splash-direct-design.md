@@ -1,6 +1,6 @@
 # Direct LM Studio Splash agent for Paperclip Standalone V2
 
-Status: implementation design · 2026-09-26
+Status: implemented; live inference qualification pending · 2026-09-26
 
 ## Intent and boundary
 
@@ -20,10 +20,20 @@ The local-trusted owner receives five Paperclip-owned tools: list workspace file
 
 The Paperclip request tool calls only the server-derived loopback API URL and a company-scoped task/agent path allowlist. It uses the run JWT out of band and includes `X-Paperclip-Run-Id` on mutations. Existing route authorization, approval, activity, single-assignee, and issue-checkout rules remain authoritative. The model never receives the JWT. A failed or uncertain mutation is surfaced as such; the adapter does not silently retry a non-idempotent request. Task creation requires an idempotency key. Tool output is truncated before returning to the model or run log, and logs avoid raw credentials and full tool arguments.
 
-The adapter only executes within the workspace Paperclip selected for the task. It cannot choose a different directory from a model tool call. The coding pod continues to pin the owner, reviewer, and candidate SHA; this adapter changes only the owner's execution harness. Candidate capture, reviewer sandbox, approval, budget, and recovery gates remain unchanged. Pod configuration rejects the direct local adapter as reviewer.
+The adapter only executes within the workspace Paperclip selected for the task. It cannot choose a different directory from a model tool call. The coding pod continues to pin the owner, reviewer, and candidate SHA; this adapter changes only the owner's execution harness. Candidate capture, reviewer sandbox, approval, budget, and recovery gates remain unchanged. Pod configuration rejects the direct local adapter as reviewer. A Splash-owned task requires an explicit reviewer AI Connection binding before pod attachment. Attachment records a redacted snapshot of both selected routes in the task activity log: the local model or the managed AI Connection mode, provider, connection ID, and grant ID. A responsible-user default records its provider and mode because the actual default connection is resolved when the run starts; the run record carries that resolved identity.
 
 ## Integration and qualification
 
 Register the adapter in server, UI, CLI, and macOS local setup. The macOS picker shows the LM Studio Splash route without a provider login and reports downloaded-versus-loaded readiness. Agent configuration names the fixed model and endpoint rather than offering a paid-provider selector. V1/V2 bundle identities, ports, and data directories remain unchanged. No database migration or second AI credential system is needed.
 
 Focused tests use a fake LM Studio HTTP server and temporary Git workspaces to prove exact routing, tool call/result cycles, delegated task and comment wakes, file containment, command timeout/cancellation, company-scoped Paperclip API calls, malformed responses, endpoint failure, step limits, and no paid fallback. Live qualification requires the operator to load the Splash model in LM Studio and authorize a disposable Paperclip agent run; no live agent or provider account is used while implementing this adapter.
+
+## Operator live qualification
+
+1. Check free disk and LM Studio's Splash preparation location before loading. Keep the existing Hugging Face weights; loading and cache preparation may consume additional disk and memory.
+2. In LM Studio, explicitly load `qwen3.8-27b-splash` and confirm `/api/v1/models` reports `format: splash` with a nonempty `loaded_instances`. Disable JIT loading or pin the instance for the qualification. Do not rely on `/v1/models` alone.
+3. Build V2 and test the new local setup option. Create a disposable local owner and task in V2 only, with a disposable Git workspace. Confirm one read, one edit, one command, and a clear final answer; inspect the run log for tool names and usage without credentials.
+4. Delegate a child issue and send a later comment wake. Confirm each new heartbeat starts from Paperclip's task context and does not claim an old provider session. Stop an active long command and confirm cancellation terminates its process group.
+5. Attach a disposable coding pod with the Splash owner and a separately configured sandbox reviewer. Confirm the attachment activity lists the selected routes, reviewer sandbox and board approval stay required, and the V1 app, port, and data directory remain untouched.
+
+Steps 3–5 require explicit authorization to run Paperclip agents. No work or personal Claude/OpenAI account is needed for the local owner; any reviewer using a paid provider must have its intended named AI Connection selected first.

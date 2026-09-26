@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { execute } from "./execute.js";
+import { assertLmStudioSplashConfig } from "./profile.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -32,6 +33,12 @@ function context(root: string) {
 }
 
 describe("direct LM Studio Splash heartbeat", () => {
+  it("accepts controller-owned scratch and Git environment but rejects paid provider keys", () => {
+    expect(assertLmStudioSplashConfig({ env: {
+      PAPERCLIP_RUN_SCRATCH_DIR: "/tmp/run", TMPDIR: "/tmp/run", GIT_CONFIG_NOSYSTEM: "1",
+    } })).toBe(20);
+    expect(() => assertLmStudioSplashConfig({ env: { OPENAI_API_KEY: "paid-key" } })).toThrow("provider environment");
+  });
   it("executes a bounded coding tool call and returns a task response without a provider session", async () => {
     const root = await workspace();
     const requests: Array<{ url: string; body?: unknown }> = [];

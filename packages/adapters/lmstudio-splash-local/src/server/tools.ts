@@ -28,7 +28,7 @@ export const LMSTUDIO_TOOL_DEFINITIONS: LmStudioToolDefinition[] = [
     parameters: { ...object, properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } } },
   { type: "function", function: { name: "run_command", description: "Run an argv command in the assigned local-trusted workspace. No shell is added. Maximum 300 seconds.",
     parameters: { ...object, properties: { command: { type: "string" }, args: { type: "array", items: { type: "string" } }, timeoutMs: { type: "integer" } }, required: ["command"] } } },
-  { type: "function", function: { name: "paperclip_request", description: "Call a company-scoped Paperclip task or agent API with the run credential kept outside the model. Task creation requires body.idempotencyKey.",
+  { type: "function", function: { name: "paperclip_request", description: "Call Paperclip with run auth. GET /api/companies/{companyId}/issues or /agents, /api/issues/{issueId} or /comments, or /api/agents/me; POST /api/companies/{companyId}/issues or /api/issues/{issueId}/comments; PATCH /api/issues/{issueId}. Task creation requires body.idempotencyKey. Issue access remains company-authorized by Paperclip.",
     parameters: { ...object, properties: { method: { type: "string", enum: ["GET", "POST", "PATCH"] }, path: { type: "string" }, body: { type: "object" } }, required: ["method", "path"] } } },
 ];
 
@@ -98,14 +98,18 @@ async function runCommand(input: {
   const child = spawn(command, args as string[], {
     cwd: input.root, env: commandEnv(), detached: true, stdio: ["ignore", "pipe", "pipe"],
   });
-  let hardKill: ReturnType<typeof setTimeout> | undefined;
+  let terminationRequested = false;
   const killGroup = () => {
-    if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
-    try { process.kill(-child.pid, "SIGTERM"); } catch { /* already exited */ }
-    hardKill ??= setTimeout(() => {
-      if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
-      try { process.kill(-child.pid, "SIGKILL"); } catch { /* already exited */ }
+    if (!child.pid || terminationRequested) return;
+    const processGroupId = child.pid;
+    terminationRequested = true;
+    try { process.kill(-processGroupId, "SIGTERM"); } catch { /* already exited */ }
+    // A child can exit while one of its descendants keeps the process group alive.
+    // Keep this timer after the direct child's close event so Stop reaps that group.
+    const hardKill = setTimeout(() => {
+      try { process.kill(-processGroupId, "SIGKILL"); } catch { /* already exited */ }
     }, 250);
+    hardKill.unref();
   };
   let timedOut = false;
   let outputExceeded = false;
@@ -141,7 +145,6 @@ async function runCommand(input: {
     throw error;
   } finally {
     clearTimeout(timeout);
-    if (hardKill) clearTimeout(hardKill);
     input.signal?.removeEventListener("abort", abort);
   }
 }
@@ -173,11 +176,12 @@ function allowedPaperclipPath(raw: unknown, companyId: string, method: string): 
   const companyPrefix = `/api/companies/${encodeURIComponent(companyId)}`;
   const issuePath = `${companyPrefix}/issues`;
   const agentPath = `${companyPrefix}/agents`;
-  const isIssueRead = url.pathname === issuePath || url.pathname.startsWith(`${issuePath}/`);
-  const isAgentRead = url.pathname === agentPath || url.pathname.startsWith(`${agentPath}/`);
-  if (method === "GET" && (isIssueRead || isAgentRead || url.pathname === "/api/agents/me")) return requested;
-  if (method === "POST" && (url.pathname === issuePath || /^\/api\/companies\/[^/]+\/issues\/[^/]+\/comments$/.test(url.pathname) && url.pathname.startsWith(`${issuePath}/`))) return requested;
-  if (method === "PATCH" && /^\/api\/companies\/[^/]+\/issues\/[^/]+$/.test(url.pathname) && url.pathname.startsWith(`${issuePath}/`)) return requested;
+  const issueDetail = /^\/api\/issues\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(url.pathname);
+  const issueComments = /^\/api\/issues\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/comments$/i.test(url.pathname);
+  if (method === "GET" && (url.pathname === issuePath || url.pathname === agentPath ||
+      issueDetail || issueComments || url.pathname === "/api/agents/me")) return requested;
+  if (method === "POST" && (url.pathname === issuePath || issueComments)) return requested;
+  if (method === "PATCH" && issueDetail) return requested;
   if (requested.includes("/api/companies/")) throw new Error("Paperclip request cannot access another company or unsupported path.");
   throw new Error("Paperclip path is not allowed.");
 }
@@ -257,7 +261,10 @@ export async function createLmStudioToolExecutor(input: {
             if (method === "GET") throw new Error("Paperclip read failed.");
             throw new UncertainPaperclipMutationError();
           }
-          const text = await boundedText(response);
+          const text = await boundedText(response).catch(() => {
+            if (method === "GET") throw new Error("Paperclip read failed.");
+            throw new UncertainPaperclipMutationError();
+          });
           if (!response.ok) {
             if (method !== "GET" && response.status >= 500) throw new UncertainPaperclipMutationError();
             throw new Error(`Paperclip request failed with HTTP ${response.status}: ${text.slice(0, 1024)}`);

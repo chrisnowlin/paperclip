@@ -6,7 +6,7 @@ import express from "express";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { agents, agentWakeupRequests, companies, createDb, environments, issues, projects, projectWorkspaces } from "@paperclipai/db";
+import { activityLog, agents, agentWakeupRequests, companies, createDb, environments, issues, projects, projectWorkspaces } from "@paperclipai/db";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { codingPodRoutes } from "../routes/coding-pods.js";
 import { codingPodService } from "../services/coding-pods.js";
@@ -77,6 +77,37 @@ describeDb("coding pod issue attachment", () => {
     });
     expect(stored.executionPolicy).not.toHaveProperty("reviewPreset");
     expect(await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.companyId, company.id))).toHaveLength(0);
+  });
+
+  it("audits the local model owner and named reviewer account selected for a task", async () => {
+    const { company, owner, reviewer, issue } = await fixture();
+    const connectionId = "11111111-1111-4111-8111-111111111111";
+    const grantId = "22222222-2222-4222-8222-222222222222";
+    await db.update(agents).set({ adapterType: "lmstudio_splash_local", adapterConfig: { model: "qwen3.8-27b-splash" } }).where(eq(agents.id, owner.id));
+    await db.update(agents).set({ runtimeConfig: { aiConnection: {
+      provider: "openrouter", method: "api_key", mode: "shared", connectionId, grantId,
+    } } }).where(eq(agents.id, reviewer.id));
+    const response = await request(app).post(path(company.id, issue.id)).send({});
+    expect(response.status).toBe(200);
+    const [event] = await db.select().from(activityLog).where(and(
+      eq(activityLog.companyId, company.id), eq(activityLog.action, "coding_pod.attached"),
+    ));
+    expect(event?.details).toMatchObject({
+      ownerRoute: { kind: "local_lmstudio_splash", model: "qwen3.8-27b-splash" },
+      reviewerRoute: { kind: "managed", provider: "openrouter", mode: "shared", connectionId, grantId },
+    });
+    expect(JSON.stringify(event?.details)).not.toContain("apiKey");
+  });
+
+  it("does not attach a Splash-owned task to a reviewer without an explicit AI account", async () => {
+    const { company, owner, issue } = await fixture();
+    await db.update(agents).set({ adapterType: "lmstudio_splash_local", adapterConfig: { model: "qwen3.8-27b-splash" } }).where(eq(agents.id, owner.id));
+    const response = await request(app).post(path(company.id, issue.id)).send({});
+    expect(response.status).toBe(422);
+    expect(response.body.error).toContain("AI Connection");
+    expect(await db.select().from(activityLog).where(and(
+      eq(activityLog.companyId, company.id), eq(activityLog.action, "coding_pod.attached"),
+    ))).toHaveLength(0);
   });
 
   it("reuses the issue binding and keeps its pinned participants after project config changes", async () => {

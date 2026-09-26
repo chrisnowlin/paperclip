@@ -183,7 +183,7 @@ describe("buildAgentUpdatePatch", () => {
       adapterType: "lmstudio_splash_local", adapterConfig: { model: "qwen3.8-27b-splash" },
     }));
     expect(patch.adapterConfig).not.toHaveProperty("env");
-    expect(patch.runtimeConfig).toMatchObject({ aiConnection: null });
+    expect(patch.runtimeConfig).not.toHaveProperty("aiConnection");
     expect(patch.adapterConfig).toMatchObject({ model: "qwen3.8-27b-splash" });
   });
 });

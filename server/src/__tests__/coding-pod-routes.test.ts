@@ -43,7 +43,7 @@ describeDb("coding pod project routes", () => {
     await database?.cleanup();
   });
 
-  async function fixture(options: { git?: boolean; ownerStatus?: string; reviewerStatus?: string; reviewerCompany?: string; reviewerAdapter?: string; reviewerSandbox?: boolean } = {}) {
+  async function fixture(options: { git?: boolean; ownerStatus?: string; reviewerStatus?: string; reviewerCompany?: string; ownerAdapter?: string; reviewerAdapter?: string; reviewerSandbox?: boolean } = {}) {
     serial += 1;
     const [company] = await db.insert(companies).values({ name: `Pod Co ${serial}`, issuePrefix: `PD${serial}` }).returning();
     const otherCompany = options.reviewerCompany === "other"
@@ -53,7 +53,7 @@ describeDb("coding pod project routes", () => {
     if (options.git !== false) {
       await db.insert(projectWorkspaces).values({ companyId: company.id, projectId: project.id, name: "primary", sourceType: "git_repo", cwd: repo, isPrimary: true });
     }
-    const [owner] = await db.insert(agents).values({ companyId: company.id, name: "Owner", status: options.ownerStatus ?? "idle", adapterType: "codex_local" }).returning();
+    const [owner] = await db.insert(agents).values({ companyId: company.id, name: "Owner", status: options.ownerStatus ?? "idle", adapterType: options.ownerAdapter ?? "codex_local" }).returning();
     const [reviewer] = await db.insert(agents).values({ companyId: otherCompany.id, name: "Reviewer", status: options.reviewerStatus ?? "idle", adapterType: options.reviewerAdapter ?? "opencode_local",
       defaultEnvironmentId: options.reviewerSandbox === false ? null : sandboxEnvironmentId }).returning();
     return { company, project, owner, reviewer };
@@ -84,6 +84,20 @@ describeDb("coding pod project routes", () => {
     });
     expect(response.status).toBe(422);
     expect(response.body.error).toContain("sandbox environment");
+  });
+
+  it("accepts direct LM Studio Splash as local owner and rejects it as reviewer", async () => {
+    const valid = await fixture({ ownerAdapter: "lmstudio_splash_local" });
+    const ownerResponse = await request(app).put(url(valid.company.id, valid.project.id)).send({
+      ownerAgentId: valid.owner.id, reviewerAgentId: valid.reviewer.id, enabled: true,
+    });
+    expect(ownerResponse.status).toBe(200);
+    const invalid = await fixture({ reviewerAdapter: "lmstudio_splash_local" });
+    const reviewerResponse = await request(app).put(url(invalid.company.id, invalid.project.id)).send({
+      ownerAgentId: invalid.owner.id, reviewerAgentId: invalid.reviewer.id, enabled: true,
+    });
+    expect(reviewerResponse.status).toBe(422);
+    expect(reviewerResponse.body.error).toContain("local-only");
   });
 
   it("can disable an existing pod after its reviewer sandbox is removed", async () => {

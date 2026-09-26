@@ -82,10 +82,9 @@ export function buildAgentUpdatePatch(agent: Agent, overlay: AgentConfigOverlay)
   }
 
   if (overlay.adapterType === "lmstudio_splash_local") {
-    patch.runtimeConfig = {
-      ...(patch.runtimeConfig as Record<string, unknown> | undefined ?? agent.runtimeConfig ?? {}),
-      aiConnection: null,
-    };
+    const runtimeConfig = { ...(patch.runtimeConfig as Record<string, unknown> | undefined ?? agent.runtimeConfig ?? {}) };
+    delete runtimeConfig.aiConnection;
+    patch.runtimeConfig = runtimeConfig;
   }
 
   return patch;

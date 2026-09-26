@@ -7,7 +7,7 @@ import { normalizeIssueExecutionPolicy } from "./issue-execution-policy.js";
 import { issueService } from "./issues.js";
 import { getLatestCodingPodCandidate, readCodingPodCandidateSnapshot } from "./coding-pod-candidates.js";
 import { logActivity, publishActivity, type ActivityPublication } from "./activity-log.js";
-import type { CodingPod, CodingPodIssueBinding, CodingPodIssueView, CodingPodIssuePhase, UpsertCodingPod } from "@paperclipai/shared";
+import { aiConnectionBindingSchema, type CodingPod, type CodingPodIssueBinding, type CodingPodIssueView, type CodingPodIssuePhase, type UpsertCodingPod } from "@paperclipai/shared";
 import { findActiveServerAdapter } from "../adapters/registry.js";
 import { conflict, notFound, unprocessable } from "../errors.js";
 
@@ -15,8 +15,22 @@ const execFileAsync = promisify(execFile);
 const LOCAL_CODING_ADAPTERS = new Set([
   "claude_local", "codex_local", "cursor", "gemini_local",
   "grok_local", "hermes_local", "kimi_local", "opencode_local",
-  "paperclip_runner", "pi_local",
+  "lmstudio_splash_local", "paperclip_runner", "pi_local",
 ]);
+
+function describeAgentRoute(agent: Pick<typeof agents.$inferSelect, "adapterType" | "runtimeConfig">) {
+  if (agent.adapterType === "lmstudio_splash_local") {
+    return { kind: "local_lmstudio_splash", model: "qwen3.8-27b-splash" };
+  }
+  const binding = aiConnectionBindingSchema.safeParse(agent.runtimeConfig?.aiConnection);
+  if (binding.success) {
+    const { provider, mode } = binding.data;
+    return mode === "responsible_user"
+      ? { kind: "managed", provider, mode }
+      : { kind: "managed", provider, mode, connectionId: binding.data.connectionId, grantId: binding.data.grantId };
+  }
+  return { kind: "adapter", adapterType: agent.adapterType };
+}
 
 function toCodingPod(row: typeof codingPods.$inferSelect): CodingPod {
   return { ...row };
@@ -60,6 +74,19 @@ export async function attachCodingPodToIssue(
       eq(codingPods.companyId, input.companyId), eq(codingPods.projectId, issue.projectId),
     )).limit(1);
     if (!pod?.enabled) throw conflict("This project has no enabled coding pod");
+    const podAgents = await tx.select({
+      id: agents.id, adapterType: agents.adapterType, runtimeConfig: agents.runtimeConfig,
+    }).from(agents).where(and(
+      eq(agents.companyId, input.companyId),
+      inArray(agents.id, [pod.ownerAgentId, pod.reviewerAgentId]),
+    )).for("share");
+    const owner = podAgents.find((agent) => agent.id === pod.ownerAgentId);
+    const reviewer = podAgents.find((agent) => agent.id === pod.reviewerAgentId);
+    if (!owner || !reviewer) throw conflict("Coding pod agents changed during attachment");
+    if (owner.adapterType === "lmstudio_splash_local" &&
+        !aiConnectionBindingSchema.safeParse(reviewer.runtimeConfig?.aiConnection).success) {
+      throw unprocessable("Splash-owned coding pods require an explicit reviewer AI Connection");
+    }
 
     const policy = normalizeIssueExecutionPolicy({
       mode: "normal",
@@ -99,7 +126,10 @@ export async function attachCodingPodToIssue(
       entityType: "issue",
       entityId: issue.id,
       issueId: issue.id,
-      details: { podId: pod.id, ownerAgentId: pod.ownerAgentId, reviewerAgentId: pod.reviewerAgentId },
+      details: {
+        podId: pod.id, ownerAgentId: pod.ownerAgentId, reviewerAgentId: pod.reviewerAgentId,
+        ownerRoute: describeAgentRoute(owner), reviewerRoute: describeAgentRoute(reviewer),
+      },
     }, publications);
     return toIssueBinding(row);
   });
@@ -187,6 +217,9 @@ export function codingPodService(db: Db) {
           throw unprocessable(`Coding pod ${role} needs an available local coding adapter`);
         }
         if (role === "reviewer" && input.enabled) {
+          if (agent.adapterType === "lmstudio_splash_local") {
+            throw unprocessable("The LM Studio Splash adapter is local-only and cannot review in a sandbox");
+          }
           const [reviewEnvironment] = agent.defaultEnvironmentId
             ? await db.select({ driver: environments.driver, status: environments.status }).from(environments)
                 .where(eq(environments.id, agent.defaultEnvironmentId)).limit(1)
