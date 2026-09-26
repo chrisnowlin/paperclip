@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { issues, projects, type Db } from "@paperclipai/db";
 import { attachCodingPodIssueSchema, upsertCodingPodSchema } from "@paperclipai/shared";
 import { attachCodingPodToIssue, codingPodService, getCodingPodIssueView } from "../services/coding-pods.js";
+import { readCodingPodCandidateDiff } from "../services/coding-pod-candidates.js";
 import { logActivity } from "../services/activity-log.js";
 import { validate } from "../middleware/validate.js";
 import { assertBoard, getAccessibleResource, getActorInfo } from "./authz.js";
@@ -45,6 +46,17 @@ export function codingPodRoutes(db: Db) {
     const [issue] = await db.select().from(issues).where(and(eq(issues.id, issueId), eq(issues.companyId, companyId))).limit(1);
     if (!await getAccessibleResource(req, res, issue, "Issue not found")) return;
     res.json(await getCodingPodIssueView(db, companyId, issueId));
+  });
+
+  router.get("/companies/:companyId/issues/:issueId/coding-pod/diff", async (req, res) => {
+    const companyId = String(req.params.companyId);
+    const issueId = String(req.params.issueId);
+    const [issue] = await db.select().from(issues).where(and(eq(issues.id, issueId), eq(issues.companyId, companyId))).limit(1);
+    if (!await getAccessibleResource(req, res, issue, "Issue not found")) return;
+    const candidateId = typeof req.query.candidateId === "string" ? req.query.candidateId : "";
+    const diff = await readCodingPodCandidateDiff(db, { companyId, issueId, candidateId });
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.type("text/plain").send(diff);
   });
 
   router.post("/companies/:companyId/issues/:issueId/coding-pod", validate(attachCodingPodIssueSchema), async (req, res) => {

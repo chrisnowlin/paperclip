@@ -20,6 +20,7 @@ const mockIssuesApi = vi.hoisted(() => ({
   update: vi.fn(),
 }));
 const mockAgentsApi = vi.hoisted(() => ({ list: vi.fn() }));
+const mockCodingPodsApi = vi.hoisted(() => ({ getProject: vi.fn(), saveProject: vi.fn() }));
 const mockHeartbeatsApi = vi.hoisted(() => ({ liveRunsForCompany: vi.fn() }));
 const mockBudgetsApi = vi.hoisted(() => ({ overview: vi.fn(), upsertPolicy: vi.fn() }));
 const mockExecutionWorkspacesApi = vi.hoisted(() => ({ list: vi.fn() }));
@@ -47,6 +48,7 @@ const mockPluginSlotMount = vi.hoisted(() => vi.fn());
 vi.mock("../api/projects", () => ({ projectsApi: mockProjectsApi }));
 vi.mock("../api/issues", () => ({ issuesApi: mockIssuesApi }));
 vi.mock("../api/agents", () => ({ agentsApi: mockAgentsApi }));
+vi.mock("../api/codingPods", () => ({ codingPodsApi: mockCodingPodsApi }));
 vi.mock("../api/heartbeats", () => ({ heartbeatsApi: mockHeartbeatsApi }));
 vi.mock("../api/budgets", () => ({ budgetsApi: mockBudgetsApi }));
 vi.mock("../api/execution-workspaces", () => ({ executionWorkspacesApi: mockExecutionWorkspacesApi }));
@@ -188,6 +190,7 @@ describe("ProjectDetail", () => {
     mockProjectsApi.list.mockResolvedValue([project()]);
     mockIssuesApi.list.mockResolvedValue([]);
     mockAgentsApi.list.mockResolvedValue([]);
+    mockCodingPodsApi.getProject.mockResolvedValue(null);
     mockHeartbeatsApi.liveRunsForCompany.mockResolvedValue([]);
     mockBudgetsApi.overview.mockResolvedValue({ policies: [] });
     mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: false });
@@ -203,6 +206,20 @@ describe("ProjectDetail", () => {
       state: "left",
       updatedAt: new Date("2026-05-01T00:00:00Z"),
     });
+  });
+
+  it("shows coding pod setup on the configuration tab without starting work", async () => {
+    mockLocation.pathname = "/projects/project-1/configuration";
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: true });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<QueryClientProvider client={queryClient}><ProjectDetail /></QueryClientProvider>);
+    });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(container.textContent).toContain("Coding pod");
+    expect(container.textContent).toContain("No task starts when you save");
+    expect(mockCodingPodsApi.getProject).toHaveBeenCalledWith("company-1", "project-1");
   });
 
   afterEach(async () => {

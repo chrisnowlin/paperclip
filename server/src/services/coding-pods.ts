@@ -1,11 +1,11 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
-import { and, eq, inArray } from "drizzle-orm";
-import { agents, codingPodIssueBindings, codingPods, issues, projectWorkspaces, projects, type Db } from "@paperclipai/db";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
+import { agents, codingPodIssueBindings, codingPods, heartbeatRuns, issues, projectWorkspaces, projects, type Db } from "@paperclipai/db";
 import { normalizeIssueExecutionPolicy } from "./issue-execution-policy.js";
 import { issueService } from "./issues.js";
-import { getLatestCodingPodCandidate } from "./coding-pod-candidates.js";
+import { getLatestCodingPodCandidate, readCodingPodCandidateSnapshot } from "./coding-pod-candidates.js";
 import { logActivity, publishActivity, type ActivityPublication } from "./activity-log.js";
 import type { CodingPod, CodingPodIssueBinding, CodingPodIssueView, CodingPodIssuePhase, UpsertCodingPod } from "@paperclipai/shared";
 import { findActiveServerAdapter } from "../adapters/registry.js";
@@ -114,7 +114,26 @@ export async function getCodingPodIssueView(db: Db, companyId: string, issueId: 
     eq(codingPodIssueBindings.companyId, companyId), eq(codingPodIssueBindings.issueId, issueId),
   )).limit(1);
   const binding = row ? toIssueBinding(row) : null;
-  return { binding, candidate: await getLatestCodingPodCandidate(db, companyId, issueId), phase: issuePhase(issue, binding) };
+  const candidate = binding ? await getLatestCodingPodCandidate(db, companyId, issueId) : null;
+  let phase = issuePhase(issue, binding);
+  if (binding && candidate && (phase === "review_pending" || phase === "awaiting_board")) {
+    try {
+      const current = await readCodingPodCandidateSnapshot(db, { companyId, issueId, workspaceId: candidate.workspaceId });
+      if (current.baseSha !== candidate.baseSha || current.headSha !== candidate.headSha) phase = "candidate_stale";
+    } catch {
+      phase = "candidate_stale";
+    }
+  }
+  if (binding && phase === "review_pending") {
+    const [run] = await db.select({ id: heartbeatRuns.id }).from(heartbeatRuns).where(and(
+      eq(heartbeatRuns.companyId, companyId),
+      eq(heartbeatRuns.agentId, binding.reviewerAgentId),
+      eq(heartbeatRuns.status, "running"),
+      or(eq(heartbeatRuns.nativeIssueId, issueId), sql`${heartbeatRuns.contextSnapshot}->>'issueId' = ${issueId}`),
+    )).limit(1);
+    if (run) phase = "review_running";
+  }
+  return { binding, candidate, phase };
 }
 
 export function codingPodService(db: Db) {

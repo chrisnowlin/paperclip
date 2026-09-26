@@ -8,6 +8,7 @@ import { instanceSettingsApi } from "../api/instanceSettings";
 import { projectsApi } from "../api/projects";
 import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
+import { codingPodsApi } from "../api/codingPods";
 import { heartbeatsApi } from "../api/heartbeats";
 import { assetsApi } from "../api/assets";
 import { usePanel } from "../context/PanelContext";
@@ -20,6 +21,7 @@ import { InlineEditor } from "../components/InlineEditor";
 import { StatusBadge } from "../components/StatusBadge";
 import { ProjectTile } from "../components/ProjectTile";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
+import { ProjectCodingPodCard } from "../components/ProjectCodingPodCard";
 import { IssuesList } from "../components/IssuesList";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { PageTabBar } from "../components/PageTabBar";
@@ -393,6 +395,22 @@ export function ProjectDetail() {
   // distinguish "contribution unavailable" from "not asked yet" on cold loads.
   const pluginTabDecisionLoaded = Boolean(resolvedCompanyId) && !pluginDetailSlotsLoading;
   const isolatedWorkspacesEnabled = experimentalSettingsQuery.data?.enableIsolatedWorkspaces === true;
+  const codingPodQueryKey = ["coding-pod", "project", resolvedCompanyId, project?.id] as const;
+  const codingPodQuery = useQuery({
+    queryKey: codingPodQueryKey,
+    queryFn: () => codingPodsApi.getProject(resolvedCompanyId!, project!.id),
+    enabled: activeTab === "configuration" && Boolean(resolvedCompanyId && project?.id),
+  });
+  const codingPodAgentsQuery = useQuery({
+    queryKey: resolvedCompanyId ? queryKeys.agents.list(resolvedCompanyId) : ["agents", "coding-pod-disabled"],
+    queryFn: () => agentsApi.list(resolvedCompanyId!),
+    enabled: activeTab === "configuration" && Boolean(resolvedCompanyId),
+  });
+  const saveCodingPod = useMutation({
+    mutationFn: (input: { ownerAgentId: string; reviewerAgentId: string; enabled: boolean }) =>
+      codingPodsApi.saveProject(resolvedCompanyId!, project!.id, input),
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: codingPodQueryKey }); },
+  });
   const workspaceTabProjectId = project?.id ?? null;
   const { data: workspaceTabIssues = [], isLoading: isWorkspaceTabIssuesLoading, error: workspaceTabIssuesError } = useQuery({
     queryKey: workspaceTabProjectId && resolvedCompanyId
@@ -888,6 +906,15 @@ export function ProjectDetail() {
             onArchive={(archived) => archiveProject.mutate(archived)}
             archivePending={archiveProject.isPending}
           />
+          {resolvedCompanyId ? <ProjectCodingPodCard
+            agents={codingPodAgentsQuery.data ?? []}
+            pod={codingPodQuery.data ?? null}
+            loading={codingPodQuery.isLoading || codingPodAgentsQuery.isLoading}
+            isolatedWorkspacesEnabled={isolatedWorkspacesEnabled}
+            onSave={(input) => saveCodingPod.mutate(input)}
+            saving={saveCodingPod.isPending}
+            error={saveCodingPod.error?.message ?? codingPodQuery.error?.message ?? codingPodAgentsQuery.error?.message ?? null}
+          /> : null}
         </div>
       )}
 

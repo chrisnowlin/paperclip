@@ -160,6 +160,40 @@ export async function getLatestCodingPodCandidate(db: Db, companyId: string, iss
   return row ?? null;
 }
 
+export async function readCodingPodCandidateDiff(
+  db: Db,
+  input: { companyId: string; issueId: string; candidateId: string },
+): Promise<string> {
+  if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(input.candidateId)) {
+    throw notFound("Coding pod candidate not found");
+  }
+  const [candidate] = await db.select().from(codingPodCandidates).where(and(
+    eq(codingPodCandidates.id, input.candidateId),
+    eq(codingPodCandidates.companyId, input.companyId),
+    eq(codingPodCandidates.issueId, input.issueId),
+  )).limit(1);
+  if (!candidate) throw notFound("Coding pod candidate not found");
+  const [workspace] = await db.select({ cwd: executionWorkspaces.cwd }).from(executionWorkspaces).where(and(
+    eq(executionWorkspaces.id, candidate.workspaceId),
+    eq(executionWorkspaces.companyId, input.companyId),
+    eq(executionWorkspaces.sourceIssueId, input.issueId),
+  )).limit(1);
+  if (!workspace?.cwd) throw notFound("Coding pod source workspace not found");
+  if (!/^[0-9a-f]{40}$/.test(candidate.baseSha) || !/^[0-9a-f]{40}$/.test(candidate.headSha)) {
+    throw unprocessable("Coding pod candidate Git commits are invalid");
+  }
+  try {
+    const { stdout } = await execFileAsync("git", ["--no-optional-locks", "-C", workspace.cwd,
+      "diff", "--no-ext-diff", "--no-textconv", candidate.baseSha, candidate.headSha, "--"], {
+      timeout: 10_000,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    return stdout;
+  } catch {
+    throw unprocessable("Candidate diff is unavailable or exceeds 2 MB; inspect the source workspace directly");
+  }
+}
+
 export async function readCodingPodCandidateSnapshot(
   db: Db,
   input: { companyId: string; issueId: string; workspaceId: string },

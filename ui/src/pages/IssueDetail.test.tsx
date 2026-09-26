@@ -107,6 +107,7 @@ const mockAuthApi = vi.hoisted(() => ({
 const mockProjectsApi = vi.hoisted(() => ({
   list: vi.fn(),
 }));
+const mockCodingPodsApi = vi.hoisted(() => ({ getIssue: vi.fn(), getProject: vi.fn(), attachIssue: vi.fn() }));
 
 const mockDecisionsApi = vi.hoisted(() => ({
   list: vi.fn(),
@@ -201,6 +202,7 @@ vi.mock("../api/auth", () => ({
 vi.mock("../api/projects", () => ({
   projectsApi: mockProjectsApi,
 }));
+vi.mock("../api/codingPods", () => ({ codingPodsApi: mockCodingPodsApi }));
 
 vi.mock("../api/decisions", () => ({
   decisionsApi: mockDecisionsApi,
@@ -1370,6 +1372,8 @@ describe("IssueDetail", () => {
     mockAccessApi.listUserDirectory.mockResolvedValue({ users: [] });
     mockAuthApi.getSession.mockResolvedValue({ session: null, user: null });
     mockProjectsApi.list.mockResolvedValue([]);
+    mockCodingPodsApi.getIssue.mockResolvedValue({ binding: null, candidate: null, phase: "not_configured" });
+    mockCodingPodsApi.getProject.mockResolvedValue(null);
     mockDecisionsApi.list.mockResolvedValue([]);
     mockInstanceSettingsApi.getGeneral.mockResolvedValue({
       keyboardShortcuts: false,
@@ -2913,6 +2917,19 @@ describe("IssueDetail", () => {
 
     flushSync(() => directToolbarRoot.unmount());
     directToolbarContainer.remove();
+  });
+
+  it("shows the coding pod attachment on a project task without starting an agent", async () => {
+    mockIssuesApi.get.mockResolvedValue(createIssue({ projectId: "project-1", status: "backlog" }));
+    mockProjectsApi.list.mockResolvedValue([{ id: "project-1", name: "Code" }]);
+    mockCodingPodsApi.getProject.mockResolvedValue({ id: "pod", enabled: true });
+    await act(async () => root.render(<QueryClientProvider client={queryClient}><IssueDetail /></QueryClientProvider>));
+    await flushReact();
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("Attach coding pod");
+      expect(mockCodingPodsApi.getIssue).toHaveBeenCalledWith("company-1", "issue-1");
+    });
+    expect(mockCodingPodsApi.attachIssue).not.toHaveBeenCalled();
   });
 
   it("shows assignee and originating avatars in the issue header metadata", async () => {

@@ -8,10 +8,11 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   agents, codingPodCandidates, codingPodIssueBindings, codingPods, companies,
-  createDb, executionWorkspaces, issueComments, issues, projects,
+  createDb, executionWorkspaces, heartbeatRuns, issueComments, issues, projects,
 } from "@paperclipai/db";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
-import { assertCodingPodCandidateFreshForDecision } from "../services/coding-pod-candidates.js";
+import { assertCodingPodCandidateFreshForDecision, readCodingPodCandidateDiff } from "../services/coding-pod-candidates.js";
+import { getCodingPodIssueView } from "../services/coding-pods.js";
 import { normalizeIssueExecutionPolicy } from "../services/issue-execution-policy.js";
 import { issueRoutes } from "../routes/issues.js";
 import { errorHandler } from "../middleware/error-handler.js";
@@ -95,6 +96,34 @@ describeDb("coding pod candidate decisions", () => {
     git(f.repo, "add", ".");
     git(f.repo, "commit", "-qm", "moved");
     await expect(assertCodingPodCandidateFreshForDecision(db, { ...input, stageId: f.approvalStageId })).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("reports a running reviewer and a stale candidate in the issue read model", async () => {
+    const f = await fixture();
+    expect((await getCodingPodIssueView(db, f.company.id, f.issue.id)).phase).toBe("awaiting_board");
+    const [binding] = await db.select().from(codingPodIssueBindings).where(eq(codingPodIssueBindings.issueId, f.issue.id));
+    await db.update(issues).set({
+      assigneeAgentId: binding.reviewerAgentId,
+      executionState: { ...(f.issue.executionState as Record<string, unknown>), currentStageId: f.reviewStageId,
+        currentStageIndex: 0, currentStageType: "review", currentParticipant: { type: "agent", agentId: binding.reviewerAgentId } } as typeof f.issue.executionState,
+    }).where(eq(issues.id, f.issue.id));
+    expect((await getCodingPodIssueView(db, f.company.id, f.issue.id)).phase).toBe("review_pending");
+    await db.insert(heartbeatRuns).values({ companyId: f.company.id, agentId: binding.reviewerAgentId, status: "running",
+      contextSnapshot: { issueId: f.issue.id } });
+    expect((await getCodingPodIssueView(db, f.company.id, f.issue.id)).phase).toBe("review_running");
+    writeFileSync(join(f.repo, "late.txt"), "changed after review\n");
+    expect((await getCodingPodIssueView(db, f.company.id, f.issue.id)).phase).toBe("candidate_stale");
+  });
+
+  it("serves the pinned candidate comparison from local Git", async () => {
+    const f = await fixture();
+    const [candidate] = await db.select().from(codingPodCandidates).where(eq(codingPodCandidates.issueId, f.issue.id));
+    const diff = await readCodingPodCandidateDiff(db, { companyId: f.company.id, issueId: f.issue.id, candidateId: candidate.id });
+    expect(diff).toContain("-base");
+    expect(diff).toContain("+reviewed");
+    expect(diff).not.toContain("late change");
+    await expect(readCodingPodCandidateDiff(db, { companyId: f.company.id, issueId: f.issue.id, candidateId: "00000000-0000-4000-8000-000000000000" }))
+      .rejects.toMatchObject({ status: 404 });
   });
 
   it("refuses an approval stage without any candidate", async () => {

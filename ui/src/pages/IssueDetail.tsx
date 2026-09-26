@@ -61,6 +61,7 @@ import {
 import { agentsApi } from "../api/agents";
 import { authApi } from "../api/auth";
 import { projectsApi } from "../api/projects";
+import { codingPodsApi } from "../api/codingPods";
 import { executionWorkspacesApi } from "../api/execution-workspaces";
 import { useCompany } from "../context/CompanyContext";
 import { useDialogActions } from "../context/DialogContext";
@@ -186,6 +187,7 @@ import { IssueAttachmentsSection } from "../components/IssueAttachmentsSection";
 import { IssueDocumentsSection } from "../components/IssueDocumentsSection";
 import { IssuePlanDecompositionsSection } from "../components/IssuePlanDecompositionsSection";
 import { IssueOutputSection } from "../components/issue-output/IssueOutputSection";
+import { IssueCodingPodPanel } from "../components/IssueCodingPodPanel";
 import { isImageAttachment, isVideoAttachment } from "../lib/issue-attachments";
 import {
   getIssueOutputs,
@@ -3015,6 +3017,33 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
     !hasLegacyIssueDetailQuery(location.search)
   ));
   const resolvedCompanyId = issue?.companyId ?? selectedCompanyId;
+  const codingPodIssueKey = ["coding-pod", "issue", issue?.companyId, issue?.id] as const;
+  const codingPodViewQuery = useQuery({
+    queryKey: codingPodIssueKey,
+    queryFn: () => codingPodsApi.getIssue(issue!.companyId, issue!.id),
+    enabled: Boolean(issue?.id && issue?.projectId && !conversation),
+    refetchInterval: (query) => query.state.data?.binding ? 5_000 : false,
+  });
+  const codingPodProjectQuery = useQuery({
+    queryKey: ["coding-pod", "project", issue?.companyId, issue?.projectId],
+    queryFn: () => codingPodsApi.getProject(issue!.companyId, issue!.projectId!),
+    enabled: Boolean(issue?.companyId && issue?.projectId && !conversation),
+  });
+  const attachCodingPod = useMutation({
+    mutationFn: () => codingPodsApi.attachIssue(issue!.companyId, issue!.id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: codingPodIssueKey });
+      if (issue?.id) void queryClient.invalidateQueries({ queryKey: queryKeys.issues.detail(issue.id) });
+    },
+  });
+  const decideCodingPod = useMutation({
+    mutationFn: ({ outcome, comment }: { outcome: "approved" | "changes_requested"; comment: string }) =>
+      issuesApi.update(issue!.id, { status: outcome === "approved" ? "done" : "todo", comment }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: codingPodIssueKey });
+      if (issue?.id) void queryClient.invalidateQueries({ queryKey: queryKeys.issues.detail(issue.id) });
+    },
+  });
   const externalObjectsState = useIssueExternalObjects(conversation && !conversation.issue ? null : issue?.id ?? null);
   // A closed isolated workspace no longer blocks the composer. The server reopens
   // the workspace when the next comment or resume arrives, so the composer stays
@@ -7393,6 +7422,22 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
 
           {taskChatShellEnabled ? null : issueHeaderBlock}
 
+          {issue.projectId && !conversation ? <IssueCodingPodPanel
+            view={codingPodViewQuery.data ?? null}
+            loading={codingPodViewQuery.isLoading || codingPodProjectQuery.isLoading}
+            error={codingPodViewQuery.error?.message ?? codingPodProjectQuery.error?.message ?? decideCodingPod.error?.message ?? null}
+            attachError={attachCodingPod.error?.message ?? null}
+            issueStatus={issue.status}
+            podConfigured={codingPodProjectQuery.data?.enabled === true}
+            onAttach={() => attachCodingPod.mutate()}
+            attaching={attachCodingPod.isPending}
+            onDecide={(outcome, comment) => decideCodingPod.mutate({ outcome, comment })}
+            deciding={decideCodingPod.isPending}
+            companyPrefix={companyPrefix}
+            repoUrl={resolvedProject?.codebase?.repoUrl ?? null}
+            onOpenArtifacts={taskChatShellEnabled ? revealNewArtifact : undefined}
+          /> : null}
+
           {taskChatShellEnabled ? null : pluginOutletsBlock}
 
           {taskChatShellEnabled ? null : showRichSubIssuesSection ? (
@@ -7488,7 +7533,7 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
           )}
 
           {taskChatShellEnabled ? null : (
-            <IssueOutputSection
+            <div id="task-work-products"><IssueOutputSection
               workProducts={workProducts}
               onMediaClick={(item) => {
                 const meta = item.metadata;
@@ -7502,7 +7547,7 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
                 setGalleryIndex(idx >= 0 ? idx : 0);
                 setGalleryOpen(true);
               }}
-            />
+            /></div>
           )}
 
           {taskChatShellEnabled ? null : attachmentsInitialLoading ? (
@@ -7605,6 +7650,7 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
           )}
 
           <Tabs
+            id="task-conversation"
             value={resolvedDetailTab}
             onValueChange={setDetailTab}
             className={
