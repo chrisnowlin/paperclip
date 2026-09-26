@@ -34,7 +34,7 @@ function describePodAgentRoute(agent: Pick<typeof agents.$inferSelect, "adapterT
   if (binding.success) {
     const { provider, method, mode } = binding.data;
     return mode === "responsible_user"
-      ? { kind: "managed", provider, method, mode }
+      ? { kind: "managed", provider, mode }
       : { kind: "managed", provider, method, mode, connectionId: binding.data.connectionId, grantId: binding.data.grantId };
   }
   return { kind: "unmanaged", adapterType: agent.adapterType };

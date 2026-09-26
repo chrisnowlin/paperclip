@@ -97,6 +97,7 @@ describeDb("coding pod issue attachment", () => {
       ownerRoute: { kind: "managed", provider: "openai", mode: "shared", connectionId, grantId },
       reviewerRoute: { kind: "managed", provider: "openrouter", mode: "responsible_user" },
     });
+    expect((entry?.details as Record<string, unknown>)?.reviewerRoute).not.toHaveProperty("method");
   });
 
   it("records an explicit local Splash route without treating it as an AI account", async () => {
