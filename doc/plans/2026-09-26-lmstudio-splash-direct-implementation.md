@@ -64,5 +64,5 @@
 
 - [x] Write failing Swift and pod tests for setup/readiness and owner/reviewer selection.
 - [x] Implement setup and pod validation; run focused tests and Swift build/tests.
-- [x] Run token gates, repository typecheck, focused tests, Swift tests, and repository build. The full `pnpm test:run` gate was attempted from the managed worktree; existing OpenAI AI Connection tests fail because their project-auth scan sees the host's ancestor `~/.codex/config.toml`. This is an environmental failure, not a change to AI Connection runtime code.
+- [x] Run token gates, repository typecheck, focused tests, Swift tests, and repository build. The full `pnpm test:run` gate was attempted and stopped after existing OpenAI AI Connection tests failed because their project-auth scan sees the host's ancestor `~/.codex/config.toml`. The full suite remains unverified from this worktree; AI Connection runtime code was not changed.
 - [x] Commit and report the remaining live qualification: explicit LM Studio load, disposable agent task, delegation, Stop, and V1/V2 isolation.
