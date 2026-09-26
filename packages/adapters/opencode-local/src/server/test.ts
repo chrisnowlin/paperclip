@@ -29,7 +29,7 @@ import { discoverOpenCodeModels, ensureOpenCodeModelConfiguredAndAvailable } fro
 import { parseOpenCodeJsonl } from "./parse.js";
 import { SANDBOX_INSTALL_COMMAND } from "../index.js";
 import { prepareOpenCodeRuntimeConfig, prepareManagedOpenCodeRemoteHomes } from "./runtime-config.js";
-import { assertLocalSplashReady } from "./splash.js";
+import { assertLocalSplashCliOverridesAbsent, assertLocalSplashReady } from "./splash.js";
 
 function summarizeStatus(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentTestResult["status"] {
   if (checks.some((check) => check.level === "error")) return "fail";
@@ -75,6 +75,7 @@ export async function testEnvironment(
     try {
       if (ctx.executionTarget?.kind === "remote" || config.managedAiConnection)
         throw new Error("Local Splash requires local execution without a paid AI Connection.");
+      assertLocalSplashCliOverridesAbsent(config);
       await assertLocalSplashReady(config.model);
     } catch (error) {
       return { adapterType: ctx.adapterType, testedAt: new Date().toISOString(), status: "fail", checks: [{ code: "splash_unavailable", level: "error",

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { asBoolean } from "@paperclipai/adapter-utils/server-utils";
@@ -106,6 +107,7 @@ export async function prepareOpenCodeRuntimeConfig(input: {
   env: Record<string, string>;
   config: Record<string, unknown>;
   targetIsRemote?: boolean;
+  splashSessionIdentity?: { companyId: string; agentId: string; taskId?: string | null };
 }): Promise<PreparedOpenCodeRuntimeConfig> {
   if (input.config.localSplash === true) {
     const model = parseConfiguredModelRef(input.config.model);
@@ -114,6 +116,7 @@ export async function prepareOpenCodeRuntimeConfig(input: {
     }
     if (input.targetIsRemote) throw new Error("Splash is available only on this Mac's local execution target.");
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-splash-opencode-"));
+    try {
     const configDir = path.join(home, "opencode");
     await fs.mkdir(configDir, { recursive: true });
     const splashConfig = JSON.stringify({
@@ -130,7 +133,22 @@ export async function prepareOpenCodeRuntimeConfig(input: {
       permission: { external_directory: "allow" },
     });
     await fs.writeFile(path.join(configDir, "opencode.json"), splashConfig, { mode: 0o600 });
-    const env: Record<string, string> = { ...input.env, XDG_CONFIG_HOME: home, XDG_DATA_HOME: path.join(home, "data"),
+    let dataHome = path.join(home, "data");
+    if (input.splashSessionIdentity) {
+      const instanceId = process.env.PAPERCLIP_INSTANCE_ID?.trim() || "default";
+      if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(instanceId)) {
+        throw new Error("Invalid Paperclip instance ID for local Splash state.");
+      }
+      const paperclipHome = process.env.PAPERCLIP_HOME?.trim() || path.join(os.homedir(), ".paperclip");
+      const identity = input.splashSessionIdentity;
+      const key = createHash("sha256").update(JSON.stringify([
+        identity.companyId, identity.agentId, identity.taskId ?? null,
+      ])).digest("hex");
+      dataHome = path.join(paperclipHome, "instances", instanceId, "local-splash", "opencode", key);
+      await fs.mkdir(dataHome, { recursive: true, mode: 0o700 });
+      await fs.chmod(dataHome, 0o700);
+    }
+    const env: Record<string, string> = { ...input.env, XDG_CONFIG_HOME: home, XDG_DATA_HOME: dataHome,
       XDG_CACHE_HOME: path.join(home, "cache"), XDG_STATE_HOME: path.join(home, "state") };
     for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
       "OPENAI_API_KEY", "OPENROUTER_API_KEY", "XAI_API_KEY", "GROK_API_KEY",
@@ -141,6 +159,10 @@ export async function prepareOpenCodeRuntimeConfig(input: {
     env.OPENCODE_CONFIG_CONTENT = splashConfig;
     return { env, notes: ["Using isolated local Splash OpenCode profile."],
       cleanup: async () => { await fs.rm(home, { recursive: true, force: true }); } };
+    } catch (error) {
+      await fs.rm(home, { recursive: true, force: true });
+      throw error;
+    }
   }
   const skipPermissions = asBoolean(input.config.dangerouslySkipPermissions, true);
   if (!skipPermissions) {

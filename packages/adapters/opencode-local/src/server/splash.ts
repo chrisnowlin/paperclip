@@ -1,6 +1,14 @@
 export const SPLASH_MODEL = "splash/incoai/Qwen3.8-27B-Splash";
 const SPLASH_API_MODEL = "incoai/Qwen3.8-27B-Splash";
 
+/** A dedicated route cannot accept later CLI options that may replace its model or server. */
+export function assertLocalSplashCliOverridesAbsent(config: Record<string, unknown>): void {
+  if ((Array.isArray(config.extraArgs) && config.extraArgs.length > 0) ||
+      (Array.isArray(config.args) && config.args.length > 0)) {
+    throw new Error("Local Splash does not accept extra arguments; remove CLI overrides before selecting this route.");
+  }
+}
+
 /** Probe only loopback metadata. This never starts Splash or runs inference. */
 export async function assertLocalSplashReady(model: unknown, fetcher: typeof fetch = fetch): Promise<void> {
   if (model !== SPLASH_MODEL) throw new Error(`Splash requires ${SPLASH_MODEL}.`);

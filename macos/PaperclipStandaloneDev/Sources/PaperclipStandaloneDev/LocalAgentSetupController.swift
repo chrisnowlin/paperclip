@@ -61,7 +61,8 @@ final class LocalAgentSetupController: NSObject {
     private var openCodeModelsByProvider: [String: [String]] = [:]
     private var modelDiscoveryToken = UUID()
     private var busy = false
-    private let splashModel = "splash/incoai/Qwen3.8-27B-Splash"
+    private let splashModel = LocalOpenCodeModels.splashModel
+    private var splashReady = false
 
     private struct Company: Decodable {
         let id: String
@@ -232,37 +233,45 @@ final class LocalAgentSetupController: NSObject {
     private func discoverOpenCodeProviders(command: String) {
         let token = UUID()
         modelDiscoveryToken = token
+        splashReady = false
+        openCodeModelsByProvider = LocalOpenCodeModels.merging(nil)
+        openCodeProviderPopup.removeAllItems()
+        openCodeProviderPopup.addItem(withTitle: Self.providerLabel("splash"))
+        openCodeProviderPopup.lastItem?.representedObject = "splash"
+        refreshModelChoices()
+        status.stringValue = "Splash is available for setup. Checking its local endpoint and signed-in OpenCode providers…"
+        status.textColor = .secondaryLabelColor
+        testButton.isEnabled = !busy
+        createButton.isEnabled = !busy
         Task {
+            let ready = await Self.splashIsReady()
+            guard selectedProvider == .opencode, modelDiscoveryToken == token else { return }
+            splashReady = ready
+            updateOpenCodeStatus()
             do {
                 let found = try await Task.detached {
                     try Self.readOpenCodeModels(command: command)
                 }.value
-                let splashReady = await Self.splashIsReady()
-                var available = found
-                available["splash"] = [splashModel]
                 guard selectedProvider == .opencode, modelDiscoveryToken == token else { return }
+                let available = LocalOpenCodeModels.merging(found)
+                let selectedId = openCodeProviderPopup.selectedItem?.representedObject as? String
                 openCodeModelsByProvider = available
                 openCodeProviderPopup.removeAllItems()
                 for providerId in available.keys.sorted(by: { Self.providerLabel($0) < Self.providerLabel($1) }) {
                     openCodeProviderPopup.addItem(withTitle: Self.providerLabel(providerId))
                     openCodeProviderPopup.lastItem?.representedObject = providerId
                 }
-                if let preferred = openCodeProviderPopup.itemArray.first(where: {
-                    $0.representedObject as? String == "zai-coding-plan"
+                if let selected = openCodeProviderPopup.itemArray.first(where: {
+                    $0.representedObject as? String == selectedId
                 }) {
-                    openCodeProviderPopup.select(preferred)
+                    openCodeProviderPopup.select(selected)
                 }
                 refreshModelChoices()
-                status.stringValue = splashReady
-                    ? "Splash is ready. Choose an OpenCode provider and model, then test the route."
-                    : "Splash is available for setup but is not serving at 127.0.0.1:8000. Start it explicitly before testing or running the agent."
-                status.textColor = splashReady ? .secondaryLabelColor : .systemOrange
-                testButton.isEnabled = !busy
-                createButton.isEnabled = !busy
+                updateOpenCodeStatus()
             } catch {
                 guard selectedProvider == .opencode, modelDiscoveryToken == token else { return }
-                status.stringValue = "Could not load OpenCode providers: \(error.localizedDescription)"
-                status.textColor = .systemRed
+                status.stringValue = "Could not load signed-in OpenCode providers. Splash remains available; test its route before use."
+                status.textColor = .systemOrange
             }
         }
     }
@@ -327,8 +336,19 @@ final class LocalAgentSetupController: NSObject {
 
     @objc private func openCodeProviderChanged(_ sender: NSPopUpButton) {
         refreshModelChoices()
-        status.stringValue = "Choose a model, then test the connection in Paperclip."
-        status.textColor = .secondaryLabelColor
+        updateOpenCodeStatus()
+    }
+
+    private func updateOpenCodeStatus() {
+        if openCodeProviderPopup.selectedItem?.representedObject as? String == "splash" {
+            status.stringValue = splashReady
+                ? "Splash is ready. Test its local route in Paperclip."
+                : "Splash is not serving at 127.0.0.1:8000. Start it explicitly before testing or running the agent."
+            status.textColor = splashReady ? .secondaryLabelColor : .systemOrange
+        } else {
+            status.stringValue = "Choose a model, then test the selected OpenCode provider in Paperclip."
+            status.textColor = .secondaryLabelColor
+        }
     }
 
     private func refreshModelChoices() {

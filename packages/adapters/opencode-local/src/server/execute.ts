@@ -60,7 +60,7 @@ import {
 } from "./models.js";
 import { removeMaintainerOnlySkillSymlinks } from "@paperclipai/adapter-utils/server-utils";
 import { prepareOpenCodeRuntimeConfig, prepareManagedOpenCodeRemoteHomes } from "./runtime-config.js";
-import { assertLocalSplashReady } from "./splash.js";
+import { assertLocalSplashCliOverridesAbsent, assertLocalSplashReady } from "./splash.js";
 import { SANDBOX_INSTALL_COMMAND } from "../index.js";
 import { resolveOpenCodeSkillsHome } from "./skills.js";
 
@@ -241,6 +241,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   if (config.localSplash === true) {
     if (executionTargetIsRemote) throw new Error("Local Splash cannot run on a remote execution target.");
     if (config.managedAiConnection) throw new Error("Local Splash cannot use a paid AI Connection.");
+    assertLocalSplashCliOverridesAbsent(config);
     await assertLocalSplashReady(model);
   }
   const variant = asString(config.variant, "").trim();
@@ -334,7 +335,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   if (authToken) {
     env.PAPERCLIP_API_KEY = authToken;
   }
-  const preparedRuntimeConfig = await prepareOpenCodeRuntimeConfig({ env, config });
+  const preparedRuntimeConfig = await prepareOpenCodeRuntimeConfig({ env, config,
+    ...(config.localSplash === true ? { splashSessionIdentity: {
+      companyId: agent.companyId, agentId: agent.id, taskId: wakeTaskId,
+    } } : {}),
+  });
   const localRuntimeConfigHome =
     preparedRuntimeConfig.notes.length > 0 ? preparedRuntimeConfig.env.XDG_CONFIG_HOME : "";
   try {
