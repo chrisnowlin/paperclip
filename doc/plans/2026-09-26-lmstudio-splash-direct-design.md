@@ -1,6 +1,6 @@
 # Direct LM Studio Splash agent for Paperclip Standalone V2
 
-Status: implemented; live inference qualification pending · 2026-09-26
+Status: implemented; basic live task verified, broader qualification pending · 2026-09-26
 
 ## Intent and boundary
 
@@ -28,7 +28,7 @@ The adapter only executes within the workspace Paperclip selected for the task. 
 
 Register the adapter in server, UI, CLI, and macOS local setup. The macOS picker shows the LM Studio Splash route without a provider login and reports downloaded-versus-loaded readiness. Agent configuration names the fixed model and endpoint rather than offering a paid-provider selector. V1/V2 bundle identities, ports, and data directories remain unchanged. No database migration or second AI credential system is needed.
 
-Focused tests use a fake LM Studio HTTP server and temporary Git workspaces to prove exact routing, tool call/result cycles, delegated task and comment wakes, file containment, command timeout/cancellation, company-scoped Paperclip API calls, malformed responses, endpoint failure, step limits, and no paid fallback. Live qualification requires the operator to load the Splash model in LM Studio and authorize a disposable Paperclip agent run; no live agent or provider account is used while implementing this adapter.
+Focused tests use a fake LM Studio HTTP server and temporary Git workspaces to prove exact routing, tool call/result cycles, delegated task and comment wakes, file containment, command timeout/cancellation, company-scoped Paperclip API calls, malformed responses, endpoint failure, step limits, and no paid fallback. The basic live task result and remaining live checks are recorded below.
 
 ## Operator live qualification
 
@@ -39,3 +39,13 @@ Focused tests use a fake LM Studio HTTP server and temporary Git workspaces to p
 5. Attach a disposable coding pod with the Splash owner and a separately configured sandbox reviewer. Confirm the attachment activity lists the selected routes, reviewer sandbox and board approval stay required, and the V1 app, port, and data directory remain untouched.
 
 Steps 3–5 require explicit authorization to run Paperclip agents. No work or personal Claude/OpenAI account is needed for the local owner; any reviewer using a paid provider must have its intended named AI Connection selected first.
+
+## Basic live qualification on 2026-09-26
+
+With the operator's authorization, the exact `incoai` model was loaded from LM Studio's existing local files at 8,192 context and one prediction slot. A direct `/v1/chat/completions` request returned `READY`. No weights were downloaded.
+
+An isolated source-server instance on `127.0.0.1:3320` used a fresh embedded database on port `54339` under `/tmp/paperclip-splash-e2e.RY21jP`; the installed/V1/V2 app ports and data directories were untouched. The assigned disposable issue `SPL-1` (`ff42474a-5c0d-483c-b969-1aefc01c1318`) automatically started run `abbe1f39-da30-4a81-af0d-114b3d039072`. It succeeded in about 28 seconds with six tool calls, zero reported local-model cost, 13,180 aggregate input tokens, and 538 output tokens. Its log shows list, read, write, two command attempts (one tool error followed by success), and an authorized Paperclip request. The workspace contained only the new `RESULT.txt`; its bytes were exactly `SPLASH_E2E_OK\n`. The agent posted issue comment `901cd784-5286-4b49-8756-2bf0dccd586f` confirming the file and command.
+
+A manual wake sent while the first run was active produced a second successful run after the first finished. Because the issue was still in progress, the normal successful-run handoff started another continuation; the disposable agent was paused and that continuation was cancelled. The test server was stopped and the model unloaded. No work/personal provider account was used. Free disk fell near 1–2 GiB during inference, so check storage before another live run.
+
+Still to qualify live: simultaneous Splash tasks and queue/Stop behavior, delegated child tasks, the bundled V2 app, and a coding pod with a named reviewer AI Connection. The focused tests cover those contracts without inference.
