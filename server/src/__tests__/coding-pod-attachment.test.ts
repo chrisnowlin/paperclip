@@ -6,7 +6,7 @@ import express from "express";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { agents, agentWakeupRequests, companies, createDb, environments, issues, projects, projectWorkspaces } from "@paperclipai/db";
+import { activityLog, agents, agentWakeupRequests, companies, createDb, environments, issues, projects, projectWorkspaces } from "@paperclipai/db";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { codingPodRoutes } from "../routes/coding-pods.js";
 import { codingPodService } from "../services/coding-pods.js";
@@ -77,6 +77,42 @@ describeDb("coding pod issue attachment", () => {
     });
     expect(stored.executionPolicy).not.toHaveProperty("reviewPreset");
     expect(await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.companyId, company.id))).toHaveLength(0);
+  });
+
+  it("records each task role's selected account route when the pod is attached", async () => {
+    const { company, owner, reviewer, issue } = await fixture();
+    const connectionId = "11111111-1111-4111-8111-111111111111";
+    const grantId = "22222222-2222-4222-8222-222222222222";
+    await db.update(agents).set({ runtimeConfig: { aiConnection: {
+      provider: "openai", method: "api_key", mode: "shared", connectionId, grantId,
+    } } }).where(eq(agents.id, owner.id));
+    await db.update(agents).set({ runtimeConfig: { aiConnection: {
+      provider: "openrouter", method: "api_key", mode: "responsible_user",
+    } } }).where(eq(agents.id, reviewer.id));
+    expect((await request(app).post(path(company.id, issue.id)).send({})).status).toBe(200);
+    const [entry] = await db.select().from(activityLog).where(and(
+      eq(activityLog.companyId, company.id), eq(activityLog.action, "coding_pod.attached"),
+    ));
+    expect(entry?.details).toMatchObject({
+      ownerRoute: { kind: "managed", provider: "openai", mode: "shared", connectionId, grantId },
+      reviewerRoute: { kind: "managed", provider: "openrouter", mode: "responsible_user" },
+    });
+  });
+
+  it("records an explicit local Splash route without treating it as an AI account", async () => {
+    const { company, owner, issue } = await fixture();
+    await db.update(agents).set({ adapterType: "opencode_local", adapterConfig: {
+      localSplash: true, model: "splash/incoai/Qwen3.8-27B-Splash",
+    } }).where(eq(agents.id, owner.id));
+    expect((await request(app).post(path(company.id, issue.id)).send({})).status).toBe(200);
+    const [entry] = await db.select().from(activityLog).where(and(
+      eq(activityLog.companyId, company.id), eq(activityLog.action, "coding_pod.attached"),
+    ));
+    expect(entry?.details).toMatchObject({
+      ownerRoute: { kind: "local_splash", model: "splash/incoai/Qwen3.8-27B-Splash" },
+      reviewerRoute: { kind: "unmanaged", adapterType: "opencode_local" },
+    });
+    expect(JSON.stringify(entry?.details)).not.toContain("apiKey");
   });
 
   it("reuses the issue binding and keeps its pinned participants after project config changes", async () => {

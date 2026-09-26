@@ -43,7 +43,7 @@ describeDb("coding pod project routes", () => {
     await database?.cleanup();
   });
 
-  async function fixture(options: { git?: boolean; ownerStatus?: string; reviewerStatus?: string; reviewerCompany?: string; reviewerAdapter?: string; reviewerSandbox?: boolean } = {}) {
+  async function fixture(options: { git?: boolean; ownerStatus?: string; reviewerStatus?: string; reviewerCompany?: string; reviewerAdapter?: string; reviewerSandbox?: boolean; reviewerSplash?: boolean } = {}) {
     serial += 1;
     const [company] = await db.insert(companies).values({ name: `Pod Co ${serial}`, issuePrefix: `PD${serial}` }).returning();
     const otherCompany = options.reviewerCompany === "other"
@@ -55,6 +55,7 @@ describeDb("coding pod project routes", () => {
     }
     const [owner] = await db.insert(agents).values({ companyId: company.id, name: "Owner", status: options.ownerStatus ?? "idle", adapterType: "codex_local" }).returning();
     const [reviewer] = await db.insert(agents).values({ companyId: otherCompany.id, name: "Reviewer", status: options.reviewerStatus ?? "idle", adapterType: options.reviewerAdapter ?? "opencode_local",
+      adapterConfig: options.reviewerSplash ? { localSplash: true, model: "splash/incoai/Qwen3.8-27B-Splash" } : {},
       defaultEnvironmentId: options.reviewerSandbox === false ? null : sandboxEnvironmentId }).returning();
     return { company, project, owner, reviewer };
   }
@@ -84,6 +85,15 @@ describeDb("coding pod project routes", () => {
     });
     expect(response.status).toBe(422);
     expect(response.body.error).toContain("sandbox environment");
+  });
+
+  it("rejects a local Splash reviewer even if a sandbox is selected", async () => {
+    const { company, project, owner, reviewer } = await fixture({ reviewerSplash: true });
+    const response = await request(app).put(url(company.id, project.id)).send({
+      ownerAgentId: owner.id, reviewerAgentId: reviewer.id, enabled: true,
+    });
+    expect(response.status).toBe(422);
+    expect(response.body.error).toContain("local Splash");
   });
 
   it("can disable an existing pod after its reviewer sandbox is removed", async () => {

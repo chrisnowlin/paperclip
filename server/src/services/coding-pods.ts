@@ -7,7 +7,7 @@ import { normalizeIssueExecutionPolicy } from "./issue-execution-policy.js";
 import { issueService } from "./issues.js";
 import { getLatestCodingPodCandidate, readCodingPodCandidateSnapshot } from "./coding-pod-candidates.js";
 import { logActivity, publishActivity, type ActivityPublication } from "./activity-log.js";
-import type { CodingPod, CodingPodIssueBinding, CodingPodIssueView, CodingPodIssuePhase, UpsertCodingPod } from "@paperclipai/shared";
+import { aiConnectionBindingSchema, type CodingPod, type CodingPodIssueBinding, type CodingPodIssueView, type CodingPodIssuePhase, type UpsertCodingPod } from "@paperclipai/shared";
 import { findActiveServerAdapter } from "../adapters/registry.js";
 import { conflict, notFound, unprocessable } from "../errors.js";
 
@@ -24,6 +24,20 @@ function toCodingPod(row: typeof codingPods.$inferSelect): CodingPod {
 
 function toIssueBinding(row: typeof codingPodIssueBindings.$inferSelect): CodingPodIssueBinding {
   return { ...row };
+}
+
+function describePodAgentRoute(agent: Pick<typeof agents.$inferSelect, "adapterType" | "adapterConfig" | "runtimeConfig">) {
+  if (agent.adapterType === "opencode_local" && agent.adapterConfig?.localSplash === true) {
+    return { kind: "local_splash", model: agent.adapterConfig.model };
+  }
+  const binding = aiConnectionBindingSchema.safeParse(agent.runtimeConfig?.aiConnection);
+  if (binding.success) {
+    const { provider, method, mode } = binding.data;
+    return mode === "responsible_user"
+      ? { kind: "managed", provider, method, mode }
+      : { kind: "managed", provider, method, mode, connectionId: binding.data.connectionId, grantId: binding.data.grantId };
+  }
+  return { kind: "unmanaged", adapterType: agent.adapterType };
 }
 
 function issuePhase(issue: typeof issues.$inferSelect, binding: CodingPodIssueBinding | null): CodingPodIssuePhase {
@@ -60,6 +74,14 @@ export async function attachCodingPodToIssue(
       eq(codingPods.companyId, input.companyId), eq(codingPods.projectId, issue.projectId),
     )).limit(1);
     if (!pod?.enabled) throw conflict("This project has no enabled coding pod");
+    const selectedAgents = await tx.select({
+      id: agents.id, adapterType: agents.adapterType, adapterConfig: agents.adapterConfig,
+      runtimeConfig: agents.runtimeConfig,
+    }).from(agents).where(and(eq(agents.companyId, input.companyId),
+      inArray(agents.id, [pod.ownerAgentId, pod.reviewerAgentId])));
+    const owner = selectedAgents.find((agent) => agent.id === pod.ownerAgentId);
+    const reviewer = selectedAgents.find((agent) => agent.id === pod.reviewerAgentId);
+    if (!owner || !reviewer) throw conflict("Coding pod agents are no longer available");
 
     const policy = normalizeIssueExecutionPolicy({
       mode: "normal",
@@ -99,7 +121,8 @@ export async function attachCodingPodToIssue(
       entityType: "issue",
       entityId: issue.id,
       issueId: issue.id,
-      details: { podId: pod.id, ownerAgentId: pod.ownerAgentId, reviewerAgentId: pod.reviewerAgentId },
+      details: { podId: pod.id, ownerAgentId: pod.ownerAgentId, reviewerAgentId: pod.reviewerAgentId,
+        ownerRoute: describePodAgentRoute(owner), reviewerRoute: describePodAgentRoute(reviewer) },
     }, publications);
     return toIssueBinding(row);
   });
@@ -172,7 +195,7 @@ export function codingPodService(db: Db) {
 
       const selected = await db.select({
         id: agents.id, companyId: agents.companyId, status: agents.status, adapterType: agents.adapterType,
-        defaultEnvironmentId: agents.defaultEnvironmentId,
+        adapterConfig: agents.adapterConfig, defaultEnvironmentId: agents.defaultEnvironmentId,
       }).from(agents).where(and(
         eq(agents.companyId, companyId),
         inArray(agents.id, [input.ownerAgentId, input.reviewerAgentId]),
@@ -187,6 +210,9 @@ export function codingPodService(db: Db) {
           throw unprocessable(`Coding pod ${role} needs an available local coding adapter`);
         }
         if (role === "reviewer" && input.enabled) {
+          if (agent.adapterType === "opencode_local" && agent.adapterConfig?.localSplash === true) {
+            throw unprocessable("Coding pod local Splash reviewer cannot run in the required sandbox");
+          }
           const [reviewEnvironment] = agent.defaultEnvironmentId
             ? await db.select({ driver: environments.driver, status: environments.status }).from(environments)
                 .where(eq(environments.id, agent.defaultEnvironmentId)).limit(1)
