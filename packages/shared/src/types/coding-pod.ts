@@ -36,6 +36,22 @@ export type CodingPodIssuePhase =
 
 export interface CodingPodIssueView {
   binding: CodingPodIssueBinding | null;
-  candidate: null;
+  candidate: CodingPodCandidate | null;
   phase: CodingPodIssuePhase;
+}
+
+export interface CodingPodCandidate {
+  id: string;
+  companyId: string;
+  projectId: string;
+  issueId: string;
+  ownerAgentId: string;
+  reviewerAgentId: string;
+  workspaceId: string;
+  reviewWorkspaceId: string | null;
+  baseSha: string;
+  headSha: string;
+  reviewStageId: string;
+  entryStatusVersion: number;
+  createdAt: Date;
 }

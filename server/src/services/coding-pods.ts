@@ -5,6 +5,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { agents, codingPodIssueBindings, codingPods, issues, projectWorkspaces, projects, type Db } from "@paperclipai/db";
 import { normalizeIssueExecutionPolicy } from "./issue-execution-policy.js";
 import { issueService } from "./issues.js";
+import { getLatestCodingPodCandidate } from "./coding-pod-candidates.js";
 import { logActivity, publishActivity, type ActivityPublication } from "./activity-log.js";
 import type { CodingPod, CodingPodIssueBinding, CodingPodIssueView, CodingPodIssuePhase, UpsertCodingPod } from "@paperclipai/shared";
 import { findActiveServerAdapter } from "../adapters/registry.js";
@@ -113,7 +114,7 @@ export async function getCodingPodIssueView(db: Db, companyId: string, issueId: 
     eq(codingPodIssueBindings.companyId, companyId), eq(codingPodIssueBindings.issueId, issueId),
   )).limit(1);
   const binding = row ? toIssueBinding(row) : null;
-  return { binding, candidate: null, phase: issuePhase(issue, binding) };
+  return { binding, candidate: await getLatestCodingPodCandidate(db, companyId, issueId), phase: issuePhase(issue, binding) };
 }
 
 export function codingPodService(db: Db) {

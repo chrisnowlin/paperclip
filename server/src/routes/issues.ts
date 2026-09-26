@@ -6,6 +6,7 @@ import {
   validateExecutionReconciliation,
   markExecutionReconciliation,
 } from "../services/execution-recovery-resolution.js";
+import { insertCodingPodCandidate, readCodingPodCandidateSnapshot } from "../services/coding-pod-candidates.js";
 import {
   storedSteeringAcknowledgement,
   reconcileSteeredIdentity,
@@ -37,6 +38,7 @@ import {
   chatConversations,
   chatEndpoints,
   chatPublications,
+  codingPodIssueBindings,
   companyMemberships,
   documents,
   executionWorkspaces,
@@ -13160,6 +13162,26 @@ export function issueRoutes(
       Object.assign(updateFields, transition.patch);
 
       const nextStatus = updateFields.status ?? existing.status;
+      const [codingPodReviewBinding] = existing.status === "in_progress" && nextStatus === "in_review" && existing.assigneeAgentId
+        ? await db.select().from(codingPodIssueBindings).where(and(
+            eq(codingPodIssueBindings.companyId, existing.companyId),
+            eq(codingPodIssueBindings.issueId, existing.id),
+            eq(codingPodIssueBindings.ownerAgentId, existing.assigneeAgentId),
+          )).limit(1)
+        : [];
+      if (codingPodReviewBinding) {
+        const nextExecutionState = updateFields.executionState as Record<string, unknown> | undefined;
+        if (nextExecutionState?.currentStageId !== codingPodReviewBinding.reviewStageId) {
+          throw conflict("Coding pod review stage changed before candidate capture");
+        }
+        if (!existing.executionWorkspaceId) {
+          throw unprocessable("Coding pod review requires an execution workspace with a committed candidate");
+        }
+        const activeOwnerRun = await resolveActiveIssueRun(existing);
+        if (activeOwnerRun && (activeOwnerRun.id !== actor.runId || actor.agentId !== codingPodReviewBinding.ownerAgentId)) {
+          throw conflict("Wait for the owner run to settle before requesting coding pod review");
+        }
+      }
       if (updateFields.unblockDescriptor && nextStatus !== "blocked") {
         throw unprocessable("unblockDescriptor requires blocked status");
       }
@@ -13479,6 +13501,9 @@ export function issueRoutes(
         updateFields.status === "done" || updateFields.status === "cancelled";
       const updateIssue = (tx?: Parameters<typeof svc.update>[2]) => {
         if (tx) {
+          if (codingPodReviewBinding) {
+            return svc.update(id, issueUpdateData, tx, postCommitActivityPublications, postCommitIssueActions);
+          }
           if (shouldCollectCompletionPublication) {
             return svc.update(
               id,
@@ -13612,6 +13637,7 @@ export function issueRoutes(
         ? await sourceTrustForActorWrite(existing, actor)
         : undefined;
       const shouldUseTransactionalIssueUpdate =
+        Boolean(codingPodReviewBinding) ||
         Boolean(commentAttachmentIds?.length) ||
         Boolean(decision) ||
         shouldRelayStop ||
@@ -13620,6 +13646,22 @@ export function issueRoutes(
       try {
         if (shouldUseTransactionalIssueUpdate) {
           issue = await db.transaction(async (tx) => {
+            let codingPodSnapshot: Awaited<ReturnType<typeof readCodingPodCandidateSnapshot>> | null = null;
+            if (codingPodReviewBinding) {
+              await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`execution_workspace_lifecycle:${existing.executionWorkspaceId}`}, 0))`);
+              const lockedIssue = await svc.getByIdForUpdate(id, tx);
+              if (!lockedIssue || lockedIssue.status !== existing.status ||
+                  Number(lockedIssue.statusVersion) !== Number(existing.statusVersion) ||
+                  lockedIssue.executionWorkspaceId !== existing.executionWorkspaceId ||
+                  lockedIssue.assigneeAgentId !== codingPodReviewBinding.ownerAgentId) {
+                throw conflict("Coding pod task changed while capturing its candidate");
+              }
+              codingPodSnapshot = await readCodingPodCandidateSnapshot(tx as unknown as Db, {
+                companyId: existing.companyId,
+                issueId: existing.id,
+                workspaceId: existing.executionWorkspaceId!,
+              });
+            }
             if (
               reviewPolicySensitiveMutationRequested &&
               !(await assertLockedReviewPolicyAllowsMutation(tx))
@@ -13627,6 +13669,30 @@ export function issueRoutes(
               return null;
             const updated = await updateIssue(tx);
             if (!updated) return null;
+            if (codingPodReviewBinding && codingPodSnapshot) {
+              await insertCodingPodCandidate(tx as unknown as Db, {
+                binding: codingPodReviewBinding,
+                snapshot: codingPodSnapshot,
+                reviewStageId: codingPodReviewBinding.reviewStageId,
+                entryStatusVersion: Number(updated.statusVersion),
+              });
+              await logActivity(tx as unknown as Db, {
+                companyId: updated.companyId,
+                actorType: actor.actorType,
+                actorId: actor.actorId,
+                action: "coding_pod.candidate_captured",
+                entityType: "issue",
+                entityId: updated.id,
+                issueId: updated.id,
+                details: {
+                  workspaceId: codingPodSnapshot.workspaceId,
+                  baseSha: codingPodSnapshot.baseSha,
+                  headSha: codingPodSnapshot.headSha,
+                  reviewStageId: codingPodReviewBinding.reviewStageId,
+                  entryStatusVersion: Number(updated.statusVersion),
+                },
+              }, postCommitActivityPublications);
+            }
             if (commentAttachmentIds?.length) {
               // Reassignment, comment creation and upload binding commit together.
               // An invalid or already-bound receipt rolls back the issue update.

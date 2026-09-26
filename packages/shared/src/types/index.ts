@@ -352,7 +352,7 @@ export type {
   UpdateDocumentAnnotationThreadRequest,
 } from "./document-annotation.js";
 export type { Project, ProjectRepository, ProjectRepositoryOptions, ProjectBudgetSummary, ProjectCodebase, ProjectCodebaseOrigin, ProjectGoalRef, ProjectManagedByPlugin, ProjectWorkspace } from "./project.js";
-export type { CodingPod, CodingPodIssueBinding, CodingPodIssuePhase, CodingPodIssueView } from "./coding-pod.js";
+export type { CodingPod, CodingPodCandidate, CodingPodIssueBinding, CodingPodIssuePhase, CodingPodIssueView } from "./coding-pod.js";
 export type {
   CompanySearchCountType,
   CompanySearchExtractIssueResult,
