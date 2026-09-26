@@ -1,6 +1,6 @@
 import type { NativeEvidenceAssessment } from "./evidence-classifier.js";
 
-export const NATIVE_STATUS_ARBITER_POLICY_VERSION = "phase6-v5";
+export const NATIVE_STATUS_ARBITER_POLICY_VERSION = "phase6-v6";
 
 export type NativeAuthoritativeIssueStatus =
   | "backlog"
@@ -18,6 +18,8 @@ export type NativeGovernanceGate = {
 
 export type NativeStatusEffect =
   | { kind: "create_interaction"; gate?: NativeGovernanceGate; prompt?: string }
+  | { kind: "activate_coding_pod_review"; reviewStageId: string; candidateSnapshot: { workspaceId: string; baseSha: string; headSha: string } }
+  | { kind: "enqueue_pod_reviewer"; agentId: string }
   | {
       kind: "bind_reviewer";
       requestKey?: string;
@@ -96,6 +98,12 @@ export function arbitrateNativeStatus(input: {
   terminalState: "succeeded" | "failed" | "cancelled";
   workspaceFinalizeStatus: "succeeded" | "failed";
   governanceGate?: NativeGovernanceGate | null;
+  podReviewGate?: {
+    reviewStageId: string;
+    reviewerAgentId: string;
+    candidateSnapshot: { workspaceId: string; baseSha: string; headSha: string };
+  } | null;
+  podReviewFailure?: "candidate_dirty" | "candidate_unresolved" | null;
   completionClaimPolicyAccepted?: boolean;
   allowIncompleteContinuation?: boolean;
   /**
@@ -251,6 +259,21 @@ export function arbitrateNativeStatus(input: {
       effects: [],
     };
   }
+  if (input.podReviewFailure && ["done", "needs_review"].includes(input.assessment.reportedDisposition)) {
+    return {
+      policyVersion: NATIVE_STATUS_ARBITER_POLICY_VERSION,
+      statusAction: "preserve",
+      toStatus: input.priorIssueStatus,
+      reasonCode: "coding_pod_candidate_unavailable",
+      unblockDescriptor: null,
+      effects: [{
+        kind: "record_recovery",
+        cause: input.podReviewFailure,
+        nextAction: "Commit and validate the coding pod workspace candidate, then resume the owner task.",
+        agentId: input.agentId,
+      }],
+    };
+  }
   const evidenceComplete =
     input.assessment.reportedDisposition === "done" &&
     input.assessment.objectiveSatisfied &&
@@ -272,6 +295,23 @@ export function arbitrateNativeStatus(input: {
     input.assessment.attentionRequests.length === 0 &&
     !input.assessment.hasBlockingRemainingWork;
   const complete = evidenceComplete || policyClaimComplete;
+  const explicitPodReview = input.assessment.reportedDisposition === "needs_review" &&
+    input.assessment.attentionRequests.length === 0 &&
+    !input.assessment.hasFailedVerification &&
+    !input.assessment.hasBlockingRemainingWork;
+  if (input.podReviewGate && (complete || explicitPodReview)) {
+    return {
+      policyVersion: NATIVE_STATUS_ARBITER_POLICY_VERSION,
+      statusAction: "in_review",
+      toStatus: "in_review",
+      reasonCode: "coding_pod_review_ready",
+      unblockDescriptor: null,
+      effects: [
+        { kind: "activate_coding_pod_review", reviewStageId: input.podReviewGate.reviewStageId, candidateSnapshot: input.podReviewGate.candidateSnapshot },
+        { kind: "enqueue_pod_reviewer", agentId: input.podReviewGate.reviewerAgentId },
+      ],
+    };
+  }
   if (complete) {
     return {
       policyVersion: NATIVE_STATUS_ARBITER_POLICY_VERSION,

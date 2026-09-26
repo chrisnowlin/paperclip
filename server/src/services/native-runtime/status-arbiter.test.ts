@@ -44,6 +44,30 @@ function arbitrate(
 }
 
 describe("native status authority", () => {
+  it("routes a completed pod owner through its review stage before completion", () => {
+    const podReviewGate = {
+      reviewStageId: "11111111-1111-4111-8111-111111111111",
+      reviewerAgentId: "reviewer",
+      candidateSnapshot: { workspaceId: "workspace", baseSha: "a".repeat(40), headSha: "b".repeat(40) },
+    };
+    expect(arbitrate({ podReviewGate })).toMatchObject({
+      toStatus: "in_review",
+      reasonCode: "coding_pod_review_ready",
+      effects: [
+        expect.objectContaining({ kind: "activate_coding_pod_review", reviewStageId: podReviewGate.reviewStageId }),
+        expect.objectContaining({ kind: "enqueue_pod_reviewer", agentId: "reviewer" }),
+      ],
+    });
+    expect(arbitrate({ podReviewGate, governanceGate: { kind: "approval", id: "prior-gate" } })).toMatchObject({
+      reasonCode: "governed_gate_pending",
+    });
+    expect(arbitrate({ podReviewFailure: "candidate_dirty" })).toMatchObject({
+      statusAction: "preserve",
+      reasonCode: "coding_pod_candidate_unavailable",
+      effects: [expect.objectContaining({ kind: "record_recovery" })],
+    });
+  });
+
   it("treats only the authorized Board response_wake as passive and preserves governance", () => {
     const passive = assessment({
       reportedDisposition: "yielded",
@@ -460,7 +484,7 @@ describe("native status authority", () => {
       expect.objectContaining({
         statusAction: "blocked",
         toStatus: "blocked",
-        policyVersion: "phase6-v5",
+        policyVersion: "phase6-v6",
         reasonCode: "current_track_blocker_waiting",
         unblockDescriptor: {
           owner: "board",

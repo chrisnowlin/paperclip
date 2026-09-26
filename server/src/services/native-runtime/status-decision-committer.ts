@@ -5,6 +5,8 @@ import {
   agentWakeupRequests,
   agents,
   approvals,
+  codingPodCandidates,
+  codingPodIssueBindings,
   completionContracts,
   heartbeatRuns,
   issueApprovals,
@@ -39,6 +41,8 @@ import {
   resolveExternalChatResponseWaitAuthorizationInTransaction,
 } from "./chat-attachment-reuse.js";
 import { issueService } from "../issues.js";
+import { insertCodingPodCandidate, readCodingPodCandidateSnapshot } from "../coding-pod-candidates.js";
+import { applyIssueExecutionPolicyTransition, normalizeIssueExecutionPolicy } from "../issue-execution-policy.js";
 import { issueThreadInteractionService } from "../issue-thread-interactions.js";
 import { issueRecoveryActionService } from "../issue-recovery-actions.js";
 import { buildIssueBlockersResolvedWakeIdempotencyKey } from "../issue-dependency-wakeups.js";
@@ -340,6 +344,17 @@ async function assertPendingEffectTarget(
       )
       .limit(1)
       .then((rows) => record(rows[0]?.executionState).status === "pending");
+  } else if (input.targetType === "coding_pod_candidate") {
+    found = await tx
+      .select({ id: codingPodCandidates.id })
+      .from(codingPodCandidates)
+      .where(and(
+        eq(codingPodCandidates.id, input.targetId),
+        eq(codingPodCandidates.companyId, input.companyId),
+        eq(codingPodCandidates.issueId, input.issueId),
+      ))
+      .limit(1)
+      .then((rows) => rows.length === 1);
   } else {
     throw new Error(
       `native_pending_effect_target_unimplemented:${input.targetType}`,
@@ -727,6 +742,27 @@ async function materializeDecisionEffect(input: {
         summary: effect.summary,
       },
     };
+  }
+  if (effect.kind === "enqueue_pod_reviewer") {
+    failAt("continuation_materialization", input.failpoint);
+    const wakeId = await enqueueWake({
+      tx: input.tx,
+      companyId: input.companyId,
+      issueId: input.issue.id,
+      agentId: effect.agentId,
+      reason: "issue_status_changed",
+      idempotencyKey: `native-status:${input.decisionId}:pod-review`,
+      payload: { nativeDecisionId: input.decisionId, codingPodReview: true },
+    });
+    return {
+      effectKind: effect.kind,
+      targetType: "agent_wakeup_request",
+      targetId: wakeId,
+      payload: { reviewerAgentId: effect.agentId },
+    };
+  }
+  if (effect.kind === "activate_coding_pod_review") {
+    throw new Error("coding_pod_review_effect_must_be_projected_with_status");
   }
   if (effect.kind === "bind_blocker") {
     failAt("blocker_materialization", input.failpoint);
@@ -1816,6 +1852,7 @@ export async function commitNativeStatusDecision(input: {
     }
 
     const materialized: NativeMaterializedStatusEffect[] = [];
+    let codingPodStagePatch: Record<string, unknown> | null = null;
     const preMaterializedEffects = new Map(
       (input.preMaterializedEffects ?? []).map((effect) => [
         effect.effectKind,
@@ -1823,6 +1860,59 @@ export async function commitNativeStatusDecision(input: {
       ]),
     );
     for (const effect of input.decision.effects) {
+      if (effect.kind === "activate_coding_pod_review") {
+        const [binding] = await tx.select().from(codingPodIssueBindings).where(and(
+          eq(codingPodIssueBindings.companyId, input.companyId),
+          eq(codingPodIssueBindings.issueId, input.issueId),
+          eq(codingPodIssueBindings.reviewStageId, effect.reviewStageId),
+        )).limit(1);
+        if (!binding || issue.assigneeAgentId !== binding.ownerAgentId ||
+            issue.executionWorkspaceId !== effect.candidateSnapshot.workspaceId) {
+          throw new NativeStatusRaceError();
+        }
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`execution_workspace_lifecycle:${effect.candidateSnapshot.workspaceId}`}, 0))`);
+        let freshSnapshot;
+        try {
+          freshSnapshot = await readCodingPodCandidateSnapshot(tx as unknown as Db, {
+            companyId: input.companyId,
+            issueId: input.issueId,
+            workspaceId: effect.candidateSnapshot.workspaceId,
+          });
+        } catch {
+          throw new NativeStatusRaceError();
+        }
+        if (freshSnapshot.baseSha !== effect.candidateSnapshot.baseSha || freshSnapshot.headSha !== effect.candidateSnapshot.headSha) {
+          throw new NativeStatusRaceError();
+        }
+        const policy = normalizeIssueExecutionPolicy(issue.executionPolicy);
+        if (!policy) throw new NativeStatusRaceError();
+        const transition = applyIssueExecutionPolicyTransition({
+          issue,
+          policy,
+          requestedStatus: "in_review",
+          requestedAssigneePatch: {},
+          actor: { agentId: binding.ownerAgentId },
+        });
+        const state = record(transition.patch.executionState);
+        if (transition.patch.status !== "in_review" || state.currentStageId !== binding.reviewStageId ||
+            transition.patch.assigneeAgentId !== binding.reviewerAgentId) {
+          throw new NativeStatusRaceError();
+        }
+        const candidate = await insertCodingPodCandidate(tx as unknown as Db, {
+          binding,
+          snapshot: effect.candidateSnapshot,
+          reviewStageId: binding.reviewStageId,
+          entryStatusVersion: input.priorStatusVersion + 1,
+        });
+        codingPodStagePatch = transition.patch;
+        materialized.push({
+          effectKind: effect.kind,
+          targetType: "coding_pod_candidate",
+          targetId: candidate.id,
+          payload: { reviewStageId: binding.reviewStageId, headSha: candidate.headSha },
+        });
+        continue;
+      }
       materialized.push(
         await materializeDecisionEffect({
           tx: tx as unknown as Db,
@@ -1857,6 +1947,7 @@ export async function commitNativeStatusDecision(input: {
       const projected = await issueService(tx as unknown as Db).update(
         input.issueId,
         {
+          ...(codingPodStagePatch ?? {}),
           status: input.decision.toStatus,
           statusVersion: input.priorStatusVersion + 1,
           lastStatusDecisionId: decisionRow.id,

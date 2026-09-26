@@ -6,6 +6,7 @@ import type { Db } from "@paperclipai/db";
 import {
   approvals,
   agentWakeupRequests,
+  codingPodIssueBindings,
   completionContracts,
   heartbeatRuns,
   heartbeatRunEvents,
@@ -17,6 +18,8 @@ import {
   statusDecisions,
   workAssessments,
 } from "@paperclipai/db";
+import { readCodingPodCandidateSnapshot } from "../coding-pod-candidates.js";
+import { HttpError } from "../../errors.js";
 import { classifyNativeEvidence } from "./evidence-classifier.js";
 import type { PrpIgnoredAttentionRequest } from "@paperclipai/paperclip-runner";
 import {
@@ -969,6 +972,43 @@ export async function repairCommittedNativeReviewResponse(
   );
   if (restored) await materializeCommittedReviewResponse(db, input.runId);
 }
+export async function prepareCodingPodNativeReviewGate(input: {
+  db: Db;
+  issue: { id: string; companyId: string; status: string; assigneeAgentId: string | null; executionWorkspaceId: string | null };
+  agentId: string;
+  reportedDisposition: string;
+  terminalState: string;
+  workspaceFinalizeStatus: string;
+  governanceGate: NativeGovernanceGate | null;
+}): Promise<{
+  podReviewGate: Parameters<typeof arbitrateNativeStatus>[0]["podReviewGate"];
+  podReviewFailure: Parameters<typeof arbitrateNativeStatus>[0]["podReviewFailure"];
+}> {
+  const none = { podReviewGate: null, podReviewFailure: null };
+  if (input.issue.status !== "in_progress" || input.terminalState !== "succeeded" || input.workspaceFinalizeStatus !== "succeeded" ||
+      input.governanceGate || !["done", "needs_review"].includes(input.reportedDisposition)) return none;
+  const [binding] = await input.db.select().from(codingPodIssueBindings).where(and(
+    eq(codingPodIssueBindings.companyId, input.issue.companyId),
+    eq(codingPodIssueBindings.issueId, input.issue.id),
+  )).limit(1);
+  if (!binding || binding.ownerAgentId !== input.agentId || input.issue.assigneeAgentId !== input.agentId) return none;
+  if (!input.issue.executionWorkspaceId) return { podReviewGate: null, podReviewFailure: "candidate_unresolved" };
+  try {
+    const candidateSnapshot = await readCodingPodCandidateSnapshot(input.db, {
+      companyId: input.issue.companyId,
+      issueId: input.issue.id,
+      workspaceId: input.issue.executionWorkspaceId,
+    });
+    return {
+      podReviewGate: { reviewStageId: binding.reviewStageId, reviewerAgentId: binding.reviewerAgentId, candidateSnapshot },
+      podReviewFailure: null,
+    };
+  } catch (error) {
+    if (!(error instanceof HttpError)) throw error;
+    return { podReviewGate: null, podReviewFailure: error.status === 409 ? "candidate_dirty" : "candidate_unresolved" };
+  }
+}
+
 export async function finalizeNativeRun(input: {
   db: Db;
   runId: string;
@@ -1126,6 +1166,15 @@ export async function finalizeNativeRun(input: {
       runId: run.id,
       executionState: record(authoritativeIssue.executionState),
     });
+    const podReview = await prepareCodingPodNativeReviewGate({
+      db: input.db,
+      issue: authoritativeIssue,
+      agentId: run.agentId,
+      reportedDisposition: assessment.reportedDisposition,
+      terminalState: String(terminalState),
+      workspaceFinalizeStatus: input.workspaceFinalizeStatus,
+      governanceGate,
+    });
     const externalChatResponseWaitAuthorization =
       assessment.reportedDisposition === "yielded" &&
       assessment.continuation?.kind === "response_wake"
@@ -1174,6 +1223,7 @@ export async function finalizeNativeRun(input: {
       terminalState: terminalState as "succeeded" | "failed" | "cancelled",
       workspaceFinalizeStatus: input.workspaceFinalizeStatus,
       governanceGate,
+      ...podReview,
       allowIncompleteContinuation,
       completionClaimPolicyAccepted:
         contractRow.risk === "low" &&
