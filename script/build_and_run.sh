@@ -5,7 +5,7 @@ setopt null_glob
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 app_project="$repo_root/macos/PaperclipStandaloneDev"
 runtime_dir="$app_project/runtime"
-app_bundle="$repo_root/dist/Paperclip Standalone Dev.app"
+app_bundle="$repo_root/dist/Paperclip Standalone V2.app"
 
 node_src=""
 for candidate in "$HOME"/.nvm/versions/node/v24.*/bin/node /opt/homebrew/opt/node@24/bin/node /opt/homebrew/bin/node; do
@@ -23,7 +23,7 @@ node_bin_dir="${node_src:h}"
 
 "$repo_root/script/build_local_runtime.sh" "$node_src"
 
-for app_pid in $(pgrep -x PaperclipStandaloneDev 2>/dev/null || true); do
+for app_pid in $(pgrep -x PaperclipStandaloneV2 2>/dev/null || true); do
   for child_pid in $(pgrep -P "$app_pid" 2>/dev/null || true); do
     kill -TERM "$child_pid" 2>/dev/null || true
   done
@@ -34,7 +34,7 @@ swift build -c release --package-path "$app_project"
 rm -rf "$app_bundle"
 mkdir -p "$app_bundle/Contents/MacOS" "$app_bundle/Contents/Resources/bin" \
   "$app_bundle/Contents/Resources/runtime"
-cp "$app_project/.build/release/PaperclipStandaloneDev" "$app_bundle/Contents/MacOS/PaperclipStandaloneDev"
+cp "$app_project/.build/release/PaperclipStandaloneV2" "$app_bundle/Contents/MacOS/PaperclipStandaloneV2"
 cp "$node_src" "$app_bundle/Contents/Resources/bin/node"
 cp -cR "$runtime_dir/node_modules" "$app_bundle/Contents/Resources/runtime/"
 
@@ -43,19 +43,19 @@ cat > "$app_bundle/Contents/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>CFBundleDevelopmentRegion</key><string>en</string>
-  <key>CFBundleExecutable</key><string>PaperclipStandaloneDev</string>
-  <key>CFBundleIdentifier</key><string>ing.paperclip.standalone.cnowlin.dev</string>
-  <key>CFBundleName</key><string>Paperclip Standalone Dev</string>
-  <key>CFBundleDisplayName</key><string>Paperclip Standalone Dev</string>
+  <key>CFBundleExecutable</key><string>PaperclipStandaloneV2</string>
+  <key>CFBundleIdentifier</key><string>ing.paperclip.standalone.cnowlin.v2</string>
+  <key>CFBundleName</key><string>Paperclip Standalone V2</string>
+  <key>CFBundleDisplayName</key><string>Paperclip Standalone V2</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>2026.916.1</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>LSMultipleInstancesProhibited</key><true/>
-  <key>PaperclipPort</key><integer>3318</integer>
-  <key>PaperclipDatabasePort</key><integer>54332</integer>
-  <key>PaperclipDataDirectoryName</key><string>Paperclip Standalone Dev</string>
+  <key>PaperclipPort</key><integer>3319</integer>
+  <key>PaperclipDatabasePort</key><integer>54333</integer>
+  <key>PaperclipDataDirectoryName</key><string>Paperclip Standalone V2</string>
   <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict></plist>
 PLIST

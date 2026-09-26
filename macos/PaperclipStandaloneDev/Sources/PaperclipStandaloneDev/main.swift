@@ -38,7 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private func makeMainMenu() {
         let mainMenu = NSMenu()
         let appItem = NSMenuItem()
-        let appMenu = NSMenu(title: "Paperclip Standalone")
+        let appMenu = NSMenu(title: "Paperclip Standalone V2")
         let openItem = NSMenuItem(title: "Open Dashboard", action: #selector(showDashboard(_:)), keyEquivalent: "o")
         openItem.target = self
         appMenu.addItem(openItem)
@@ -68,7 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         window = NSWindow(contentRect: frame,
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
-        window.title = "Paperclip Standalone"
+        window.title = "Paperclip Standalone V2"
         window.center()
         window.minSize = NSSize(width: 760, height: 520)
         window.contentView = view
@@ -144,8 +144,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
 
     private func makeStatusMenu() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "paperclip", accessibilityDescription: "Paperclip Standalone")
-        statusItem.button?.toolTip = "Paperclip Standalone"
+        statusItem.button?.image = NSImage(systemSymbolName: "paperclip", accessibilityDescription: "Paperclip Standalone V2")
+        statusItem.button?.toolTip = "Paperclip Standalone V2"
         let menu = NSMenu()
         statusLine = NSMenuItem(title: "Starting…", action: nil, keyEquivalent: "")
         statusLine.isEnabled = false
@@ -201,7 +201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         <html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>
         body{font:16px -apple-system,BlinkMacSystemFont,sans-serif;background:#f7f7f5;color:#222;display:grid;place-items:center;height:100vh;margin:0}
         main{text-align:center;max-width:520px;padding:24px}h1{font-size:23px;font-weight:600}p{line-height:1.5;color:#666}
-        </style></head><body><main><h1>Paperclip Standalone</h1><p>\(safe)</p></main></body></html>
+        </style></head><body><main><h1>Paperclip Standalone V2</h1><p>\(safe)</p></main></body></html>
         """, baseURL: nil)
     }
 

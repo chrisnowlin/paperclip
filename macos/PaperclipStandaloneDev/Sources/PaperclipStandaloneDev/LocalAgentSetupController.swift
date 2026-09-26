@@ -439,7 +439,7 @@ final class LocalAgentSetupController: NSObject {
         let safeName = (name.isEmpty ? provider.commandName : name)
             .lowercased().map { $0.isLetter || $0.isNumber ? $0 : "-" }
         let dataDirectoryName = (Bundle.main.object(forInfoDictionaryKey: "PaperclipDataDirectoryName") as? String)
-            ?? "Paperclip Standalone Dev"
+            ?? "Paperclip Standalone V2"
         let workspace = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("\(dataDirectoryName)/agent-workspaces/\(String(safeName))")
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)

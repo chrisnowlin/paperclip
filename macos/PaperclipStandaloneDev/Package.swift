@@ -2,8 +2,8 @@
 import PackageDescription
 
 let package = Package(
-    name: "PaperclipStandaloneDev",
+    name: "PaperclipStandaloneV2",
     platforms: [.macOS(.v14)],
-    products: [.executable(name: "PaperclipStandaloneDev", targets: ["PaperclipStandaloneDev"])],
-    targets: [.executableTarget(name: "PaperclipStandaloneDev")]
+    products: [.executable(name: "PaperclipStandaloneV2", targets: ["PaperclipStandaloneV2"])],
+    targets: [.executableTarget(name: "PaperclipStandaloneV2", path: "Sources/PaperclipStandaloneDev")]
 )

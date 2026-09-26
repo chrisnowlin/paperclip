@@ -10,8 +10,8 @@ final class ServerManager {
     }
 
     static let shared = ServerManager()
-    nonisolated static let port = (Bundle.main.object(forInfoDictionaryKey: "PaperclipPort") as? Int) ?? 3318
-    nonisolated static let databasePort = (Bundle.main.object(forInfoDictionaryKey: "PaperclipDatabasePort") as? Int) ?? 54332
+    nonisolated static let port = (Bundle.main.object(forInfoDictionaryKey: "PaperclipPort") as? Int) ?? 3319
+    nonisolated static let databasePort = (Bundle.main.object(forInfoDictionaryKey: "PaperclipDatabasePort") as? Int) ?? 54333
     nonisolated static let dashboard = URL(string: "http://127.0.0.1:\(port)/")!
 
     var onStateChange: ((State) -> Void)?
@@ -23,7 +23,7 @@ final class ServerManager {
 
     private var dataDirectory: URL {
         let name = (Bundle.main.object(forInfoDictionaryKey: "PaperclipDataDirectoryName") as? String)
-            ?? "Paperclip Standalone Dev"
+            ?? "Paperclip Standalone V2"
         return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(name, isDirectory: true)
     }
