@@ -334,6 +334,19 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
+  packages/adapters/lmstudio-splash-local:
+    dependencies:
+      '@paperclipai/adapter-utils':
+        specifier: workspace:*
+        version: link:../../adapter-utils
+    devDependencies:
+      '@types/node':
+        specifier: 24.13.3
+        version: 24.13.3
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+
   packages/adapters/openclaw-gateway:
     dependencies:
       '@paperclipai/adapter-utils':
