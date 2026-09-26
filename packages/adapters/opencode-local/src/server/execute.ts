@@ -60,6 +60,7 @@ import {
 } from "./models.js";
 import { removeMaintainerOnlySkillSymlinks } from "@paperclipai/adapter-utils/server-utils";
 import { prepareOpenCodeRuntimeConfig, prepareManagedOpenCodeRemoteHomes } from "./runtime-config.js";
+import { assertLocalSplashReady } from "./splash.js";
 import { SANDBOX_INSTALL_COMMAND } from "../index.js";
 import { resolveOpenCodeSkillsHome } from "./skills.js";
 
@@ -237,6 +238,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   );
   const command = asString(config.command, "opencode");
   const model = asString(config.model, "").trim();
+  if (config.localSplash === true) {
+    if (executionTargetIsRemote) throw new Error("Local Splash cannot run on a remote execution target.");
+    if (config.managedAiConnection) throw new Error("Local Splash cannot use a paid AI Connection.");
+    await assertLocalSplashReady(model);
+  }
   const variant = asString(config.variant, "").trim();
 
   const workspaceContext = parseObject(context.paperclipWorkspace);

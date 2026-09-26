@@ -61,6 +61,7 @@ final class LocalAgentSetupController: NSObject {
     private var openCodeModelsByProvider: [String: [String]] = [:]
     private var modelDiscoveryToken = UUID()
     private var busy = false
+    private let splashModel = "splash/incoai/Qwen3.8-27B-Splash"
 
     private struct Company: Decodable {
         let id: String
@@ -114,7 +115,7 @@ final class LocalAgentSetupController: NSObject {
         let heading = NSTextField(labelWithString: "Set up a local agent")
         heading.font = .boldSystemFont(ofSize: 25)
         root.addArrangedSubview(heading)
-        let intro = label("Use the Claude Code, Codex, or OpenCode sign-in already on this Mac. Choose a provider, test it in Paperclip, then add an agent. No terminal commands are needed.")
+        let intro = label("Choose a signed-in CLI provider or a running local Splash model. Test the selected route before adding an agent.")
         intro.textColor = .secondaryLabelColor
         root.addArrangedSubview(intro)
 
@@ -236,10 +237,13 @@ final class LocalAgentSetupController: NSObject {
                 let found = try await Task.detached {
                     try Self.readOpenCodeModels(command: command)
                 }.value
+                let splashReady = await Self.splashIsReady()
+                var available = found
+                available["splash"] = [splashModel]
                 guard selectedProvider == .opencode, modelDiscoveryToken == token else { return }
-                openCodeModelsByProvider = found
+                openCodeModelsByProvider = available
                 openCodeProviderPopup.removeAllItems()
-                for providerId in found.keys.sorted(by: { Self.providerLabel($0) < Self.providerLabel($1) }) {
+                for providerId in available.keys.sorted(by: { Self.providerLabel($0) < Self.providerLabel($1) }) {
                     openCodeProviderPopup.addItem(withTitle: Self.providerLabel(providerId))
                     openCodeProviderPopup.lastItem?.representedObject = providerId
                 }
@@ -249,12 +253,12 @@ final class LocalAgentSetupController: NSObject {
                     openCodeProviderPopup.select(preferred)
                 }
                 refreshModelChoices()
-                status.stringValue = found.isEmpty
-                    ? "No stored OpenCode providers with models were found."
-                    : "\(found.count) connected OpenCode providers found. Choose a provider and model."
-                status.textColor = found.isEmpty ? .systemOrange : .secondaryLabelColor
-                testButton.isEnabled = !found.isEmpty && !busy
-                createButton.isEnabled = !found.isEmpty && !busy
+                status.stringValue = splashReady
+                    ? "Splash is ready. Choose an OpenCode provider and model, then test the route."
+                    : "Splash is available for setup but is not serving at 127.0.0.1:8000. Start it explicitly before testing or running the agent."
+                status.textColor = splashReady ? .secondaryLabelColor : .systemOrange
+                testButton.isEnabled = !busy
+                createButton.isEnabled = !busy
             } catch {
                 guard selectedProvider == .opencode, modelDiscoveryToken == token else { return }
                 status.stringValue = "Could not load OpenCode providers: \(error.localizedDescription)"
@@ -266,12 +270,14 @@ final class LocalAgentSetupController: NSObject {
     private nonisolated static func readOpenCodeModels(command: String) throws -> [String: [String]] {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let authFile = home.appendingPathComponent(".local/share/opencode/auth.json")
-        let authData = try Data(contentsOf: authFile)
+        let authData = try? Data(contentsOf: authFile)
+        guard let authData else { return [:] }
         guard let auth = try JSONSerialization.jsonObject(with: authData) as? [String: Any] else {
             throw NSError(domain: "LocalAgentSetup", code: 3,
                           userInfo: [NSLocalizedDescriptionKey: "OpenCode sign-ins could not be read."])
         }
         let connectedIds = Set(auth.keys)
+        if connectedIds.isEmpty { return [:] }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: command)
         process.arguments = ["models"]
@@ -295,12 +301,26 @@ final class LocalAgentSetupController: NSObject {
         return result.mapValues { $0.sorted() }
     }
 
+    private nonisolated static func splashIsReady() async -> Bool {
+        guard let url = URL(string: "http://127.0.0.1:8000/v1/models") else { return false }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 1.5
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let models = object["data"] as? [[String: Any]] else { return false }
+            return models.contains { $0["id"] as? String == "incoai/Qwen3.8-27B-Splash" }
+        } catch { return false }
+    }
+
     private nonisolated static func providerLabel(_ id: String) -> String {
         switch id {
         case "zai-coding-plan": "Z.ai Coding Plan"
         case "opencode": "OpenCode Zen"
         case "openai": "OpenAI"
         case "openrouter": "OpenRouter"
+        case "splash": "Splash (local)"
         default: id.replacingOccurrences(of: "-", with: " ").capitalized
         }
     }
@@ -454,6 +474,13 @@ final class LocalAgentSetupController: NSObject {
             guard chosenModel.hasPrefix(providerId + "/"), chosenModel.count > providerId.count + 1 else {
                 throw NSError(domain: "LocalAgentSetup", code: 2,
                               userInfo: [NSLocalizedDescriptionKey: "Choose a model for \(Self.providerLabel(providerId)) in provider/model format."])
+            }
+            if providerId == "splash" {
+                guard chosenModel == splashModel else {
+                    throw NSError(domain: "LocalAgentSetup", code: 5,
+                                  userInfo: [NSLocalizedDescriptionKey: "Choose the loaded Splash model."])
+                }
+                config["localSplash"] = true
             }
         }
         if !chosenModel.isEmpty { config["model"] = chosenModel }

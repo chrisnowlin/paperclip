@@ -107,6 +107,41 @@ export async function prepareOpenCodeRuntimeConfig(input: {
   config: Record<string, unknown>;
   targetIsRemote?: boolean;
 }): Promise<PreparedOpenCodeRuntimeConfig> {
+  if (input.config.localSplash === true) {
+    const model = parseConfiguredModelRef(input.config.model);
+    if (model?.provider !== "splash" || model.model !== "incoai/Qwen3.8-27B-Splash") {
+      throw new Error("Splash requires the explicit model splash/incoai/Qwen3.8-27B-Splash.");
+    }
+    if (input.targetIsRemote) throw new Error("Splash is available only on this Mac's local execution target.");
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-splash-opencode-"));
+    const configDir = path.join(home, "opencode");
+    await fs.mkdir(configDir, { recursive: true });
+    const splashConfig = JSON.stringify({
+      provider: { splash: {
+        npm: "@ai-sdk/openai-compatible",
+        name: "Splash (local)",
+        options: { baseURL: "http://127.0.0.1:8000/v1", apiKey: "local-splash" },
+        models: { "incoai/Qwen3.8-27B-Splash": { name: "Qwen3.8-27B Splash" } },
+      } },
+      model: "splash/incoai/Qwen3.8-27B-Splash",
+      small_model: "splash/incoai/Qwen3.8-27B-Splash",
+      agent: Object.fromEntries(["build", "plan", "general", "explore", "title", "compaction"]
+        .map((name) => [name, { model: "splash/incoai/Qwen3.8-27B-Splash" }])),
+      permission: { external_directory: "allow" },
+    });
+    await fs.writeFile(path.join(configDir, "opencode.json"), splashConfig, { mode: 0o600 });
+    const env: Record<string, string> = { ...input.env, XDG_CONFIG_HOME: home, XDG_DATA_HOME: path.join(home, "data"),
+      XDG_CACHE_HOME: path.join(home, "cache"), XDG_STATE_HOME: path.join(home, "state") };
+    for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
+      "OPENAI_API_KEY", "OPENROUTER_API_KEY", "XAI_API_KEY", "GROK_API_KEY",
+      "CODEX_HOME", "GROK_HOME", "CLAUDE_CONFIG_DIR", "OPENCODE_AUTH_JSON",
+      "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR",
+      "PAPERCLIP_OPENCODE_PROVIDERS", "OPENAI_BASE_URL", "ANTHROPIC_BASE_URL"])
+      env[key] = "";
+    env.OPENCODE_CONFIG_CONTENT = splashConfig;
+    return { env, notes: ["Using isolated local Splash OpenCode profile."],
+      cleanup: async () => { await fs.rm(home, { recursive: true, force: true }); } };
+  }
   const skipPermissions = asBoolean(input.config.dangerouslySkipPermissions, true);
   if (!skipPermissions) {
     return {
