@@ -399,6 +399,7 @@ export {
   type UpdateProjectWorkspace,
   type ProjectExecutionWorkspacePolicy,
 } from "./project.js";
+export { upsertCodingPodSchema, type UpsertCodingPod } from "./coding-pod.js";
 
 export {
   createDocumentAnnotationCommentSchema,
