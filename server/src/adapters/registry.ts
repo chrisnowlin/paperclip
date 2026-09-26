@@ -112,6 +112,15 @@ import {
   models as openCodeModels,
 } from "@paperclipai/adapter-opencode-local";
 import {
+  execute as lmStudioSplashExecute,
+  testEnvironment as lmStudioSplashTestEnvironment,
+  getConfigSchema as getLmStudioSplashConfigSchema,
+} from "@paperclipai/adapter-lmstudio-splash-local/server";
+import {
+  agentConfigurationDoc as lmStudioSplashAgentConfigurationDoc,
+  models as lmStudioSplashModels,
+} from "@paperclipai/adapter-lmstudio-splash-local";
+import {
   execute as openclawGatewayExecute,
   testEnvironment as openclawGatewayTestEnvironment,
 } from "@paperclipai/adapter-openclaw-gateway/server";
@@ -819,6 +828,19 @@ const openCodeLocalAdapter: ServerAdapterModule = {
   agentConfigurationDoc: openCodeAgentConfigurationDoc,
 };
 
+const lmStudioSplashLocalAdapter: ServerAdapterModule = {
+  type: "lmstudio_splash_local",
+  runtimeToolDelivery: "invocation_context",
+  execute: lmStudioSplashExecute,
+  testEnvironment: lmStudioSplashTestEnvironment,
+  getConfigSchema: getLmStudioSplashConfigSchema,
+  models: lmStudioSplashModels,
+  supportsLocalAgentJwt: true,
+  supportsInstructionsBundle: false,
+  requiresMaterializedRuntimeSkills: false,
+  agentConfigurationDoc: lmStudioSplashAgentConfigurationDoc,
+};
+
 const piLocalAdapter: ServerAdapterModule = {
   type: "pi_local",
   runtimeToolDelivery: "environment",
@@ -857,6 +879,7 @@ function registerBuiltInAdapters() {
     codexLocalAdapter,
     paperclipRunnerAdapter,
     openCodeLocalAdapter,
+    lmStudioSplashLocalAdapter,
     piLocalAdapter,
     cursorCloudAdapter,
     cursorLocalAdapter,

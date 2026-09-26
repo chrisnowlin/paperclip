@@ -43,6 +43,10 @@ export function buildAgentUpdatePatch(agent: Agent, overlay: AgentConfigOverlay)
             ...overlay.adapterConfig,
           };
 
+    if (overlay.adapterType === "lmstudio_splash_local") {
+      delete nextAdapterConfig.env;
+    }
+
     patch.adapterConfig = omitUndefinedEntries(nextAdapterConfig);
     patch.replaceAdapterConfig = true;
   }
@@ -75,6 +79,13 @@ export function buildAgentUpdatePatch(agent: Agent, overlay: AgentConfigOverlay)
 
   if (Object.keys(overlay.runtime).length > 0) {
     Object.assign(patch, overlay.runtime);
+  }
+
+  if (overlay.adapterType === "lmstudio_splash_local") {
+    patch.runtimeConfig = {
+      ...(patch.runtimeConfig as Record<string, unknown> | undefined ?? agent.runtimeConfig ?? {}),
+      aiConnection: null,
+    };
   }
 
   return patch;

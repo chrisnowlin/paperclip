@@ -1,6 +1,7 @@
 export const type = "lmstudio_splash_local";
 export const label = "LM Studio Splash (local)";
-export const models = [{ id: "qwen3.8-27b-splash", label: "Qwen3.8 27B Splash" }];
+export const LMSTUDIO_SPLASH_MODEL = "qwen3.8-27b-splash";
+export const models = [{ id: LMSTUDIO_SPLASH_MODEL, label: "Qwen3.8 27B Splash" }];
 
 export const agentConfigurationDoc = `# LM Studio Splash local agent
 

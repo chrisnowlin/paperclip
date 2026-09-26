@@ -980,6 +980,11 @@ describe("requiresPushCapabilityPreflight", () => {
       issueId: "issue-1",
       explicitRunScopedSkillKeys: ["paperclipai/bundled/software-development/github-pr-workflow"],
     })).toBe(true);
+    expect(requiresPushCapabilityPreflight({
+      adapterType: "lmstudio_splash_local",
+      issueId: "issue-1",
+      explicitRunScopedSkillKeys: ["paperclipai/bundled/software-development/github-pr-workflow"],
+    })).toBe(true);
 
     expect(requiresPushCapabilityPreflight({
       adapterType: "codex_local",

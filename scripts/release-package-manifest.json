@@ -50,6 +50,11 @@
     "publishFromCi": true
   },
   {
+    "dir": "packages/adapters/lmstudio-splash-local",
+    "name": "@paperclipai/adapter-lmstudio-splash-local",
+    "publishFromCi": false
+  },
+  {
     "dir": "packages/adapters/opencode-local",
     "name": "@paperclipai/adapter-opencode-local",
     "publishFromCi": true

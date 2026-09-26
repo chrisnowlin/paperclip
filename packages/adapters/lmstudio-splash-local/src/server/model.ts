@@ -1,4 +1,5 @@
-export const LMSTUDIO_SPLASH_MODEL = "qwen3.8-27b-splash";
+import { LMSTUDIO_SPLASH_MODEL } from "../index.js";
+export { LMSTUDIO_SPLASH_MODEL };
 const MODELS_URL = "http://127.0.0.1:1234/api/v1/models";
 const COMPLETIONS_URL = "http://127.0.0.1:1234/v1/chat/completions";
 const MAX_RESPONSE_BYTES = 1_048_576;
@@ -59,10 +60,10 @@ function requestSignal(signal: AbortSignal | undefined, timeoutMs: number): Abor
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
-export async function probeLmStudioSplash(fetcher: typeof fetch = fetch): Promise<{ modelId: string }> {
+export async function probeLmStudioSplash(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<{ modelId: string }> {
   let response: Response;
   try {
-    response = await fetcher(MODELS_URL, { method: "GET", redirect: "error", signal: AbortSignal.timeout(2_000) });
+    response = await fetcher(MODELS_URL, { method: "GET", redirect: "error", signal: requestSignal(signal, 2_000) });
   } catch {
     throw new Error("LM Studio is unavailable at 127.0.0.1:1234.");
   }
@@ -135,7 +136,12 @@ export async function completeLmStudioTurn(input: {
     if (!isRecord(args)) throw new Error("LM Studio tool call arguments must be an object.");
     return { id: entry.id, name: fn.name, arguments: args };
   });
-  if (content === null && toolCalls.length === 0) throw new Error("LM Studio completion has no content or tool call.");
+  if (toolCalls.length === 0) {
+    if (isRecord(choice) && choice.finish_reason !== "stop") throw new Error("LM Studio returned an unfinished answer.");
+    if (typeof content !== "string" || !content.trim()) throw new Error("LM Studio completion has no content.");
+  } else if (isRecord(choice) && choice.finish_reason !== "tool_calls") {
+    throw new Error("LM Studio returned an unfinished tool call.");
+  }
   const rawUsage = isRecord(body) && isRecord(body.usage) ? body.usage : {};
   const tokenCount = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
   return { content: content as string | null, toolCalls, usage: {

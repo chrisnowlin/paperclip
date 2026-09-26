@@ -60,4 +60,12 @@ describe("LM Studio Splash model route", () => {
     const oversized = vi.fn<typeof fetch>().mockResolvedValue(new Response("x".repeat(1_100_000), { status: 200 }));
     await expect(completeLmStudioTurn({ messages: [], tools: [], fetcher: oversized })).rejects.toThrow("size");
   });
+
+  it.each([
+    [{ choices: [{ finish_reason: "length", message: { role: "assistant", content: "Partial result" } }] }, "unfinished"],
+    [{ choices: [{ finish_reason: "stop", message: { role: "assistant", content: "" } }] }, "no content"],
+  ] as const)("rejects a non-final or empty model answer", async (body, reason) => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response(body));
+    await expect(completeLmStudioTurn({ messages: [], tools: [], fetcher })).rejects.toThrow(reason);
+  });
 });

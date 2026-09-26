@@ -44,7 +44,7 @@
 
 - [x] Write failing tests for file read/write/list, path and symlink escape, command bounds/cancellation, company path rejection, JWT never in model output, and mutation retry behavior.
 - [x] Implement the bounded local tool executor against the existing Paperclip API authority; rerun focused tests.
-- [ ] Commit the tool boundary.
+- [x] Commit the tool boundary.
 
 ### Task 3: Heartbeat loop and adapter registration
 
@@ -52,8 +52,8 @@
 
 **Interfaces:** `execute(ctx)` builds the Paperclip wake prompt, runs a bounded model/tool loop, emits redacted progress and usage, handles Stop, and returns a normal `AdapterExecutionResult` without a claimed cross-heartbeat session. `testEnvironment(ctx)` checks readiness without inference.
 
-- [ ] Write failing adapter tests for delegated assignment, comment wake, multi-tool cycle, final response, cancellation, limits, and no paid fallback.
-- [ ] Implement the loop and register the adapter across server/UI/CLI; run focused tests, package typecheck, and build.
+- [x] Write failing adapter tests for delegated assignment, comment wake, multi-tool cycle, final response, cancellation, limits, and no paid fallback.
+- [x] Implement the loop and register the adapter across server/UI/CLI; run focused tests and targeted typechecks.
 - [ ] Commit the adapter integration.
 
 ### Task 4: V2 setup and pod qualification

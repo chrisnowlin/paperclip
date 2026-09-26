@@ -37,6 +37,7 @@ const workspacePaths = [
   "packages/adapters/hermes-gateway",
   "packages/adapters/hermes",
   "packages/adapters/opencode-local",
+  "packages/adapters/lmstudio-splash-local",
   "packages/adapters/openclaw-gateway",
 ];
 

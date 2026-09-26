@@ -97,6 +97,9 @@ importers:
       '@paperclipai/adapter-kimi-local':
         specifier: workspace:*
         version: link:../packages/adapters/kimi-local
+      '@paperclipai/adapter-lmstudio-splash-local':
+        specifier: workspace:*
+        version: link:../packages/adapters/lmstudio-splash-local
       '@paperclipai/adapter-openclaw-gateway':
         specifier: workspace:*
         version: link:../packages/adapters/openclaw-gateway
@@ -925,6 +928,9 @@ importers:
       '@paperclipai/adapter-kimi-local':
         specifier: workspace:*
         version: link:../packages/adapters/kimi-local
+      '@paperclipai/adapter-lmstudio-splash-local':
+        specifier: workspace:*
+        version: link:../packages/adapters/lmstudio-splash-local
       '@paperclipai/adapter-openclaw-gateway':
         specifier: workspace:*
         version: link:../packages/adapters/openclaw-gateway
@@ -1133,6 +1139,9 @@ importers:
       '@paperclipai/adapter-kimi-local':
         specifier: workspace:*
         version: link:../packages/adapters/kimi-local
+      '@paperclipai/adapter-lmstudio-splash-local':
+        specifier: workspace:*
+        version: link:../packages/adapters/lmstudio-splash-local
       '@paperclipai/adapter-openclaw-gateway':
         specifier: workspace:*
         version: link:../packages/adapters/openclaw-gateway

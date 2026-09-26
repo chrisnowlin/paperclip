@@ -837,6 +837,7 @@ const GIT_SENSITIVE_LOCAL_ADAPTER_TYPES = new Set([
   "grok_local",
   "hermes_local",
   "kimi_local",
+  "lmstudio_splash_local",
   "opencode_local",
   "pi_local",
 ]);

@@ -12,6 +12,12 @@ const MAX_HTTP_BYTES = 65_536;
 const MAX_ARGUMENTS = 64;
 const MAX_COMMAND_MS = 300_000;
 
+export class UncertainPaperclipMutationError extends Error {
+  constructor() { super("Paperclip request outcome is uncertain; do not retry this mutation automatically."); }
+}
+
+export class InterruptedCodingCommandError extends Error {}
+
 const object = { type: "object", additionalProperties: false };
 export const LMSTUDIO_TOOL_DEFINITIONS: LmStudioToolDefinition[] = [
   { type: "function", function: { name: "list_files", description: "List up to 200 entries in a workspace directory.",
@@ -88,7 +94,7 @@ async function runCommand(input: {
   if (typeof requestedTimeout !== "number" || !Number.isInteger(requestedTimeout) || requestedTimeout < 1 || requestedTimeout > MAX_COMMAND_MS) {
     throw new Error("Command timeout is invalid.");
   }
-  if (input.signal?.aborted) throw new Error("Run cancelled.");
+  if (input.signal?.aborted) throw new InterruptedCodingCommandError("Run cancelled.");
   const child = spawn(command, args as string[], {
     cwd: input.root, env: commandEnv(), detached: true, stdio: ["ignore", "pipe", "pipe"],
   });
@@ -124,9 +130,9 @@ async function runCommand(input: {
   try {
     if (child.pid) await input.onSpawn?.({ pid: child.pid, processGroupId: child.pid, startedAt: new Date().toISOString() });
     const exitCode = await completion;
-    if (input.signal?.aborted) throw new Error("Run cancelled.");
-    if (timedOut) throw new Error("Command timed out.");
-    if (outputExceeded) throw new Error("Command output exceeds the size limit.");
+    if (input.signal?.aborted) throw new InterruptedCodingCommandError("Run cancelled.");
+    if (timedOut) throw new InterruptedCodingCommandError("Command timed out.");
+    if (outputExceeded) throw new InterruptedCodingCommandError("Command output exceeds the size limit.");
     const output = Buffer.concat(chunks).toString("utf8");
     if (exitCode !== 0) throw new Error(`Command exited with code ${exitCode}: ${output.slice(0, 1024)}`);
     return output;
@@ -244,13 +250,18 @@ export async function createLmStudioToolExecutor(input: {
           let response: Response;
           try {
             response = await (input.fetcher ?? fetch)(new URL(requestPath, api).toString(), {
-              method, headers, body: encoded, redirect: "error", signal: input.signal ?? AbortSignal.timeout(30_000),
+              method, headers, body: encoded, redirect: "error",
+              signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
             });
           } catch {
-            throw new Error("Paperclip request outcome is uncertain; do not retry this mutation automatically.");
+            if (method === "GET") throw new Error("Paperclip read failed.");
+            throw new UncertainPaperclipMutationError();
           }
           const text = await boundedText(response);
-          if (!response.ok) throw new Error(`Paperclip request failed with HTTP ${response.status}: ${text.slice(0, 1024)}`);
+          if (!response.ok) {
+            if (method !== "GET" && response.status >= 500) throw new UncertainPaperclipMutationError();
+            throw new Error(`Paperclip request failed with HTTP ${response.status}: ${text.slice(0, 1024)}`);
+          }
           return text;
         }
         default:

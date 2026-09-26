@@ -892,6 +892,21 @@ describe("AgentConfigForm environment selector", () => {
     expect(result.container.textContent).not.toContain("Secret access");
   });
 
+  it("hides paid auth and command overrides for the direct LM Studio Splash adapter", async () => {
+    mockAgentsApi.adapterModels.mockResolvedValue([{ id: "qwen3.8-27b-splash", label: "Qwen3.8 27B Splash" }]);
+    const result = await renderForm(
+      [makeEnvironment({ id: "local-1", name: "Local", driver: "local" })],
+      { adapterType: "lmstudio_splash_local", adapterConfig: { model: "qwen3.8-27b-splash" } },
+    );
+    roots.push(result.root);
+    const text = result.container.textContent ?? "";
+    expect(text).toContain("Qwen3.8 27B Splash");
+    expect(text).not.toContain("Extra args");
+    expect(text).not.toContain("Environment variables");
+    expect(text).not.toContain("Thinking effort");
+    expect(text).not.toContain("AI connection");
+  });
+
   it("renders secret access as dedicated form content", async () => {
     const result = await renderForm(
       [makeEnvironment({ id: "local-1", name: "Local", driver: "local" })],

@@ -121,4 +121,14 @@ describe("Paperclip-owned LM Studio coding tools", () => {
     const headers = fetcher.mock.calls[0]?.[1]?.headers as Record<string, string>;
     expect(headers["X-Paperclip-Run-Id"]).toBe("run-1");
   });
+
+  it("treats a server failure after a mutation as uncertain", async () => {
+    const root = await workspace();
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("Internal error", { status: 500 }));
+    const tools = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-1",
+      authToken: "run-token", apiUrl: "http://127.0.0.1:3319", fetcher });
+    await expect(tools.execute(call("paperclip_request", { method: "PATCH", path: "/api/companies/company-1/issues/issue-1",
+      body: { status: "done" } }))).rejects.toThrow("uncertain");
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
 });

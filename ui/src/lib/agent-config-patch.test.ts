@@ -173,4 +173,17 @@ describe("buildAgentUpdatePatch", () => {
       desiredSkills: ["research", "code-review"],
     });
   });
+
+  it("clears paid authentication when changing an agent to direct LM Studio Splash", () => {
+    const agent = makeAgent();
+    agent.runtimeConfig = { ...agent.runtimeConfig, aiConnection: {
+      provider: "anthropic", method: "api_key", mode: "responsible_user",
+    } };
+    const patch = buildAgentUpdatePatch(agent, makeOverlay({
+      adapterType: "lmstudio_splash_local", adapterConfig: { model: "qwen3.8-27b-splash" },
+    }));
+    expect(patch.adapterConfig).not.toHaveProperty("env");
+    expect(patch.runtimeConfig).toMatchObject({ aiConnection: null });
+    expect(patch.adapterConfig).toMatchObject({ model: "qwen3.8-27b-splash" });
+  });
 });
