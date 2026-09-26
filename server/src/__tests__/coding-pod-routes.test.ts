@@ -5,6 +5,7 @@ import { join } from "node:path";
 import express from "express";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
 import { agents, agentWakeupRequests, companies, createDb, environments, projects, projectWorkspaces } from "@paperclipai/db";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { codingPodRoutes } from "../routes/coding-pods.js";
@@ -83,6 +84,17 @@ describeDb("coding pod project routes", () => {
     });
     expect(response.status).toBe(422);
     expect(response.body.error).toContain("sandbox environment");
+  });
+
+  it("can disable an existing pod after its reviewer sandbox is removed", async () => {
+    const { company, project, owner, reviewer } = await fixture();
+    const path = url(company.id, project.id);
+    const payload = { ownerAgentId: owner.id, reviewerAgentId: reviewer.id, enabled: true };
+    expect((await request(app).put(path).send(payload)).status).toBe(200);
+    await db.update(agents).set({ defaultEnvironmentId: null }).where(eq(agents.id, reviewer.id));
+    const response = await request(app).put(path).send({ ...payload, enabled: false });
+    expect(response.status).toBe(200);
+    expect(response.body.enabled).toBe(false);
   });
 
   it("rejects foreign, identical, paused, and unavailable-adapter agents", async () => {

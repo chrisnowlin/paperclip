@@ -186,7 +186,7 @@ export function codingPodService(db: Db) {
         if (!LOCAL_CODING_ADAPTERS.has(agent.adapterType) || !findActiveServerAdapter(agent.adapterType)) {
           throw unprocessable(`Coding pod ${role} needs an available local coding adapter`);
         }
-        if (role === "reviewer") {
+        if (role === "reviewer" && input.enabled) {
           const [reviewEnvironment] = agent.defaultEnvironmentId
             ? await db.select({ driver: environments.driver, status: environments.status }).from(environments)
                 .where(eq(environments.id, agent.defaultEnvironmentId)).limit(1)
