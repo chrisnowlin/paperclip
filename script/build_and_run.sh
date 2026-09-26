@@ -21,16 +21,7 @@ if [[ -z "$node_src" ]]; then
 fi
 node_bin_dir="${node_src:h}"
 
-if [[ ! -f "$runtime_dir/node_modules/paperclipai/dist/index.js" ]]; then
-  mkdir -p "$runtime_dir"
-  PATH="$node_bin_dir:$PATH" "$node_bin_dir/npm" install \
-    --prefix "$runtime_dir" --registry https://registry.npmjs.org \
-    --no-audit --no-fund --omit=dev paperclipai@2026.916.1
-  embedded_pg="$runtime_dir/node_modules/@embedded-postgres/darwin-arm64"
-  if [[ -f "$embedded_pg/scripts/hydrate-symlinks.js" ]]; then
-    (cd "$embedded_pg" && "$node_src" scripts/hydrate-symlinks.js)
-  fi
-fi
+"$repo_root/script/build_local_runtime.sh" "$node_src"
 
 for app_pid in $(pgrep -x PaperclipStandaloneDev 2>/dev/null || true); do
   for child_pid in $(pgrep -P "$app_pid" 2>/dev/null || true); do
@@ -45,7 +36,7 @@ mkdir -p "$app_bundle/Contents/MacOS" "$app_bundle/Contents/Resources/bin" \
   "$app_bundle/Contents/Resources/runtime"
 cp "$app_project/.build/release/PaperclipStandaloneDev" "$app_bundle/Contents/MacOS/PaperclipStandaloneDev"
 cp "$node_src" "$app_bundle/Contents/Resources/bin/node"
-ditto "$runtime_dir/node_modules" "$app_bundle/Contents/Resources/runtime/node_modules"
+cp -cR "$runtime_dir/node_modules" "$app_bundle/Contents/Resources/runtime/"
 
 cat > "$app_bundle/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
