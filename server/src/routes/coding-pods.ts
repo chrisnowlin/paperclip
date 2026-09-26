@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { and, eq } from "drizzle-orm";
-import { projects, type Db } from "@paperclipai/db";
-import { upsertCodingPodSchema } from "@paperclipai/shared";
-import { codingPodService } from "../services/coding-pods.js";
+import { issues, projects, type Db } from "@paperclipai/db";
+import { attachCodingPodIssueSchema, upsertCodingPodSchema } from "@paperclipai/shared";
+import { attachCodingPodToIssue, codingPodService, getCodingPodIssueView } from "../services/coding-pods.js";
 import { logActivity } from "../services/activity-log.js";
 import { validate } from "../middleware/validate.js";
 import { assertBoard, getAccessibleResource, getActorInfo } from "./authz.js";
@@ -37,6 +37,24 @@ export function codingPodRoutes(db: Db) {
       details: { podId: pod.id, ownerAgentId: pod.ownerAgentId, reviewerAgentId: pod.reviewerAgentId, enabled: pod.enabled },
     });
     res.json(pod);
+  });
+
+  router.get("/companies/:companyId/issues/:issueId/coding-pod", async (req, res) => {
+    const companyId = String(req.params.companyId);
+    const issueId = String(req.params.issueId);
+    const [issue] = await db.select().from(issues).where(and(eq(issues.id, issueId), eq(issues.companyId, companyId))).limit(1);
+    if (!await getAccessibleResource(req, res, issue, "Issue not found")) return;
+    res.json(await getCodingPodIssueView(db, companyId, issueId));
+  });
+
+  router.post("/companies/:companyId/issues/:issueId/coding-pod", validate(attachCodingPodIssueSchema), async (req, res) => {
+    assertBoard(req);
+    const companyId = String(req.params.companyId);
+    const issueId = String(req.params.issueId);
+    const [issue] = await db.select().from(issues).where(and(eq(issues.id, issueId), eq(issues.companyId, companyId))).limit(1);
+    if (!await getAccessibleResource(req, res, issue, "Issue not found")) return;
+    const actor = getActorInfo(req);
+    res.json(await attachCodingPodToIssue(db, { companyId, issueId, actorUserId: actor.actorId }));
   });
 
   return router;

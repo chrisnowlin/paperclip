@@ -1,6 +1,6 @@
 export { agentAdapterTypeSchema, optionalAgentAdapterTypeSchema } from "./adapter-type.js";
-export { upsertCodingPodSchema, type UpsertCodingPod } from "./validators/coding-pod.js";
-export type { CodingPod } from "./types/coding-pod.js";
+export { upsertCodingPodSchema, attachCodingPodIssueSchema, type UpsertCodingPod } from "./validators/coding-pod.js";
+export type { CodingPod, CodingPodIssueBinding, CodingPodIssuePhase, CodingPodIssueView } from "./types/coding-pod.js";
 export {
   RUNNER_GOAL_MAX_OBJECTIVE_CHARS,
   runnerGoalAvailabilitySchema,

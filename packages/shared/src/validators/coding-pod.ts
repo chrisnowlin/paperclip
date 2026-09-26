@@ -7,3 +7,5 @@ export const upsertCodingPodSchema = z.object({
 }).strict();
 
 export type UpsertCodingPod = z.infer<typeof upsertCodingPodSchema>;
+
+export const attachCodingPodIssueSchema = z.object({}).strict();
