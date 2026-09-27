@@ -20,6 +20,7 @@ import cliEsbuildConfig from "../cli/esbuild.config.mjs";
 import { bundledCliNpmDependencies } from "./cli-bundled-npm-dependencies.mjs";
 import {
   createBundledInstallManifest,
+  materializePrivateBundledManifest,
   materializePublishManifest,
   selectBundledDependencyPatches,
 } from "./prepare-bundled-package.mjs";
@@ -199,6 +200,44 @@ test("bundled package staging installs only dependencies included in the tarball
     "@paperclipai/paperclip-runner": "2026.723.0-canary.8",
   });
   assert.deepEqual(installManifest.bundleDependencies, ["embedded-postgres"]);
+});
+
+test("bundled package staging leaves private workspace packages for local staging", () => {
+  const publishManifest = {
+    name: "@paperclipai/server",
+    version: "0.3.1",
+    dependencies: {
+      "@paperclipai/adapter-lmstudio-splash-local": "0.0.1",
+      acpx: "0.13.1",
+    },
+    bundleDependencies: ["@paperclipai/adapter-lmstudio-splash-local", "acpx"],
+  };
+  const installManifest = createBundledInstallManifest(
+    publishManifest,
+    publishManifest.bundleDependencies,
+    ["@paperclipai/adapter-lmstudio-splash-local"],
+  );
+  assert.deepEqual(installManifest.dependencies, { acpx: "0.13.1" });
+  assert.deepEqual(installManifest.bundleDependencies, ["acpx"]);
+  assert.equal(publishManifest.dependencies["@paperclipai/adapter-lmstudio-splash-local"], "0.0.1");
+});
+
+test("private Splash adapter manifest points to built JavaScript and local dependency versions", () => {
+  const source = {
+    name: "@paperclipai/adapter-lmstudio-splash-local",
+    version: "0.0.1",
+    private: true,
+    type: "module",
+    exports: { ".": "./src/index.ts", "./server": "./src/server/index.ts" },
+    dependencies: { "@paperclipai/adapter-utils": "workspace:*", undici: "8.10.0" },
+    devDependencies: { typescript: "7.0.2" },
+  };
+  const staged = materializePrivateBundledManifest(source, new Map([["@paperclipai/adapter-utils", "0.3.1"]]));
+  assert.deepEqual(staged.exports["./server"], {
+    types: "./dist/server/index.d.ts", import: "./dist/server/index.js",
+  });
+  assert.equal(staged.dependencies["@paperclipai/adapter-utils"], "0.3.1");
+  assert.equal(staged.devDependencies, undefined);
 });
 
 test("bundled package staging selects only the installed dependency version's patch", (t) => {
@@ -383,13 +422,20 @@ printf 'patched spawnEnvironment runtime\\n' > "$target/dist/runtime.js"
     readFileSync(callLog, "utf8"),
     /patch -p1 --forward -d .*node_modules\/acpx/,
   );
+  const patchedBundled = serverPackage.bundleDependencies.filter((name) =>
+    rootPackage.pnpm.patchedDependencies[`${name}@${serverPackage.dependencies[name]}`],
+  );
   assert.equal(
     readFileSync(callLog, "utf8")
       .split("\n")
       .filter((line) => line.startsWith("patch ")).length,
-    serverPackage.bundleDependencies.length,
+    patchedBundled.length,
   );
-  for (const name of serverPackage.bundleDependencies) {
+  const splashDir = join(destinationDir, "node_modules/@paperclipai/adapter-lmstudio-splash-local");
+  const splashManifest = JSON.parse(readFileSync(join(splashDir, "package.json"), "utf8"));
+  assert.equal(splashManifest.exports["./server"].import, "./dist/server/index.js");
+  assert.equal(existsSync(join(splashDir, "dist/server/model.js")), true);
+  for (const name of patchedBundled) {
     const specifier = `${name}@${serverPackage.dependencies[name]}`;
     const patchPath = rootPackage.pnpm.patchedDependencies[specifier];
     assert.equal(

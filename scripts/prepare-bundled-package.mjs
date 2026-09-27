@@ -31,9 +31,14 @@ export function materializePublishManifest(pkg) {
   return publishManifest;
 }
 
-export function createBundledInstallManifest(publishManifest, bundledDependencies) {
-  const bundledDependencyNames = new Set(bundledDependencies);
+export function createBundledInstallManifest(publishManifest, bundledDependencies, localPrivateDependencies = []) {
+  const localPrivateNames = new Set(localPrivateDependencies);
+  const installBundledDependencies = bundledDependencies.filter((name) => !localPrivateNames.has(name));
+  const bundledDependencyNames = new Set(installBundledDependencies);
   const installManifest = structuredClone(publishManifest);
+
+  installManifest.bundleDependencies = installBundledDependencies;
+  if (installManifest.bundledDependencies) installManifest.bundledDependencies = installBundledDependencies;
 
   delete installManifest.devDependencies;
 
@@ -46,6 +51,29 @@ export function createBundledInstallManifest(publishManifest, bundledDependencie
   }
 
   return installManifest;
+}
+
+export function materializePrivateBundledManifest(sourceManifest, workspaceVersions) {
+  const staged = structuredClone(sourceManifest);
+  delete staged.devDependencies;
+  delete staged.scripts;
+  delete staged.publishConfig;
+  staged.exports = Object.fromEntries(Object.entries(sourceManifest.exports ?? {}).map(([name, source]) => {
+    if (typeof source !== "string" || !/^\.\/src\/.+\.ts$/.test(source)) {
+      throw new Error(`Private bundled export ${name} must point to built TypeScript source`);
+    }
+    const built = source.replace("./src/", "./dist/").replace(/\.ts$/, "");
+    return [name, { types: `${built}.d.ts`, import: `${built}.js` }];
+  }));
+  for (const section of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+    for (const [name, specifier] of Object.entries(staged[section] ?? {})) {
+      if (typeof specifier !== "string" || !specifier.startsWith("workspace:")) continue;
+      const version = workspaceVersions.get(name);
+      if (!version) throw new Error(`Private bundled dependency ${name} has no staged workspace version`);
+      staged[section][name] = version;
+    }
+  }
+  return staged;
 }
 
 function patchedDependencyPackageName(specifier) {
@@ -145,6 +173,20 @@ export function prepareBundledPackage(sourceDir, destinationDir, { sourceRoot = 
     throw new Error(`${sourcePackage.name} does not declare bundled dependencies`);
   }
 
+  const releasePackages = JSON.parse(readFileSync(resolve(sourceRoot, "scripts/release-package-manifest.json"), "utf8"));
+  const releaseByName = new Map(releasePackages.map((entry) => [entry.name, entry]));
+  const workspaceVersions = new Map(releasePackages.map((entry) => [
+    entry.name,
+    JSON.parse(readFileSync(resolve(sourceRoot, entry.dir, "package.json"), "utf8")).version,
+  ]));
+  const privateBundles = bundledDependencies.flatMap((name) => {
+    const entry = releaseByName.get(name);
+    if (!entry || entry.publishFromCi !== false) return [];
+    const packageRoot = resolve(sourceRoot, entry.dir);
+    const manifest = JSON.parse(readFileSync(resolve(packageRoot, "package.json"), "utf8"));
+    return manifest.private === true ? [{ name, packageRoot, manifest }] : [];
+  });
+
   rmSync(destinationDir, { recursive: true, force: true });
   mkdirSync(destinationDir, { recursive: true });
   for (const entry of sourcePackage.files ?? []) {
@@ -157,7 +199,7 @@ export function prepareBundledPackage(sourceDir, destinationDir, { sourceRoot = 
 
   const deployedPackagePath = resolve(destinationDir, "package.json");
   const publishManifest = materializePublishManifest(sourcePackage);
-  const installManifest = createBundledInstallManifest(publishManifest, bundledDependencies);
+  const installManifest = createBundledInstallManifest(publishManifest, bundledDependencies, privateBundles.map(({ name }) => name));
   writeFileSync(deployedPackagePath, `${JSON.stringify(installManifest, null, 2)}\n`);
 
   execFileSync(
@@ -165,6 +207,14 @@ export function prepareBundledPackage(sourceDir, destinationDir, { sourceRoot = 
     ["install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"],
     { cwd: destinationDir, stdio: "inherit" },
   );
+  for (const { name, packageRoot, manifest } of privateBundles) {
+    const built = resolve(packageRoot, "dist");
+    if (!existsSync(built)) throw new Error(`Private bundled dependency ${name} has not been built`);
+    const stagedRoot = resolve(destinationDir, "node_modules", name);
+    mkdirSync(stagedRoot, { recursive: true });
+    cpSync(built, resolve(stagedRoot, "dist"), { recursive: true });
+    writeFileSync(resolve(stagedRoot, "package.json"), `${JSON.stringify(materializePrivateBundledManifest(manifest, workspaceVersions), null, 2)}\n`);
+  }
   writeFileSync(deployedPackagePath, `${JSON.stringify(publishManifest, null, 2)}\n`);
   applyBundledDependencyPatches(destinationDir, bundledDependencies, sourceRoot);
 
