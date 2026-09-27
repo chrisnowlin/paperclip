@@ -113,7 +113,7 @@ function createFakeTransaction(overrides: Partial<WakeQueueTransaction> = {}): W
       reason: null,
       releasePolicy: null,
     })),
-    getCommentSelfAuthorship: vi.fn(async () => ({ allSelfAuthored: false })),
+    getCommentSelfAuthorship: vi.fn(async () => ({ allSelfAuthored: false, hasPostTerminalComment: true })),
     isCompletedDelegationMention: vi.fn(async () => false),
     reopenIssue: vi.fn(async () => null),
     claimDeferredWakeForPromotion: vi.fn(async () => true),
@@ -533,6 +533,30 @@ describe("releaseIssueExecution", () => {
     expect(result.outcome.kind).toBe("promoted");
   });
 
+  it("does not reopen a completed task for a comment that predates its terminal disposition", async () => {
+    const queue = [wakeCandidate({
+      agentId: ISSUE.assigneeAgentId!,
+      requestedByActorType: "user",
+      deferredCommentIds: ["board-qa-before-completion"],
+    })];
+    const transaction = createFakeTransaction({
+      findNextDeferredWake: vi.fn(async () => queue.shift() ?? null),
+      getCommentSelfAuthorship: vi.fn(async () => ({
+        allSelfAuthored: false, hasPostTerminalComment: false,
+      })),
+    });
+    const release = createReleaseIssueExecution({
+      issueLock: createFakeIssueLock(createFakeHost(), transaction, { ...ISSUE, status: "done" }),
+      recovery: createFakeRecovery(),
+    });
+
+    const result = await release({ companyId: RUN.companyId, runId: RUN.id, now: new Date() });
+
+    expect(transaction.cancelDeferredWake).toHaveBeenCalledTimes(1);
+    expect(transaction.reopenIssue).not.toHaveBeenCalled();
+    expect(result.outcome.kind).toBe("released");
+  });
+
   it.each(["done_live", "cancelled_live", "done_missing", "done_self", "done_no_resume", "done_untracked_comment"])("handles explicit agent feedback after completion: %s", async (scenario) => {
     const commentIds = ["accepted-agent-feedback"];
     const queue = [wakeCandidate({
@@ -550,7 +574,7 @@ describe("releaseIssueExecution", () => {
         liveNonSelfCommentIds: scenario === "done_missing" || scenario === "done_self" ? [] : commentIds,
         containedSelfAuthoredComment: scenario === "done_self",
       })),
-      getCommentSelfAuthorship: vi.fn(async () => ({ allSelfAuthored: scenario === "done_self" })),
+      getCommentSelfAuthorship: vi.fn(async () => ({ allSelfAuthored: scenario === "done_self", hasPostTerminalComment: true })),
       reopenIssue: vi.fn(async () => ({ ...ISSUE, status: "todo" })),
     });
     const release = createReleaseIssueExecution({

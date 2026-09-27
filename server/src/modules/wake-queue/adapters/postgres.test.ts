@@ -171,6 +171,40 @@ describeEmbeddedPostgres("wake-queue postgres adapter", () => {
     return id;
   }
 
+  it("distinguishes a pre-completion QA comment from a fresh post-completion follow-up", async () => {
+    const companyId = await seedCompany();
+    const agentId = await seedAgent({ companyId });
+    const issueId = await seedIssue({ companyId, assigneeAgentId: agentId, status: "done" });
+    const runId = await seedRun({ companyId, agentId, status: "succeeded", contextSnapshot: { issueId } });
+    const before = new Date("2026-09-27T19:51:02.000Z");
+    const terminal = new Date("2026-09-27T19:51:03.000Z");
+    const after = new Date("2026-09-27T19:51:04.000Z");
+    const [oldComment] = await db.insert(issueComments).values({
+      companyId, issueId, authorUserId: "responsible-user", body: "QA accepted before close", createdAt: before,
+    }).returning();
+    const [newComment] = await db.insert(issueComments).values({
+      companyId, issueId, authorUserId: "responsible-user", body: "Please follow up after close", createdAt: after,
+    }).returning();
+    await db.insert(activityLog).values({
+      companyId, actorType: "user", actorId: "responsible-user",
+      action: "issue.updated", entityType: "issue", entityId: issueId,
+      details: { status: "done", changes: { status: { from: "in_progress", to: "done" } } },
+      createdAt: terminal,
+    });
+    const adapter = createPostgresWakeQueueAdapter(db, stubDeps);
+    await adapter.withIssueExecutionLock({ companyId, runId, now: new Date() }, async (_locked, ports) => {
+      const oldVerdict = await ports.transaction.getCommentSelfAuthorship({
+        companyId, issueId, finishingRunId: runId, commentIds: [oldComment!.id],
+      });
+      const newVerdict = await ports.transaction.getCommentSelfAuthorship({
+        companyId, issueId, finishingRunId: runId, commentIds: [newComment!.id],
+      });
+      expect(oldVerdict).toMatchObject({ allSelfAuthored: false, hasPostTerminalComment: false });
+      expect(newVerdict).toMatchObject({ allSelfAuthored: false, hasPostTerminalComment: true });
+      return { outcome: { kind: "released" as const }, postCommitEffects: [] };
+    });
+  });
+
   it.each([
     "completed", "multiple_comments", "repeated_reference", "parent_reference", "mixed_issue_references", "mixed_foreign_references", "mixed_unknown_references", "no_comments", "missing_comment",
     "human_comment", "other_run_comment", "foreign_comment", "other_issue_comment", "deleted_comment",

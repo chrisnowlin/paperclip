@@ -387,6 +387,8 @@ The parent may receive a closing comment before its assignee changes the status 
 
 Accepted agent feedback must survive a child changing to `done` before its active run exits. Deferred wake promotion may reopen that completed child only for its current assignee, with explicit agent resume intent and live tracked comments from another author. Claim promotion before reopening. Cancelled tasks, deleted comments, self-authored comments, empty continuations, and agent continuations without explicit intent keep their existing suppression rules. Normal pause, ownership, authorization, and budget gates still apply.
 
+A deferred comment created before the latest `done` or `cancelled` status transition cannot reopen that newer terminal decision when the finishing run drains its queue. A new, authorized follow-up comment after the transition retains the normal reopen path.
+
 Pause and tree-control previews should make the same distinction visible. They should report whether the affected subtree contains live running work, queued wakes, agent-owned work, or only human-owned/static issues, so a pause after a handoff does not look like it interrupted agent execution when no agent execution path existed.
 
 ### Adapter-backed workspace coherence

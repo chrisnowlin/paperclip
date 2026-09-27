@@ -2,7 +2,7 @@ import { isAcknowledgedNativeStop } from "../../../services/acknowledged-native-
 import { instanceSettingsService } from "../../../services/instance-settings.js";
 import { currentConversationCommentCondition } from "../../../services/agent-conversations.js";
 import { getExecutionBlocker } from "../../../services/execution-blocker.js";
-import { and, asc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { extractIssueReferenceIdentifiers } from "@paperclipai/shared";
 import {
@@ -369,10 +369,30 @@ function buildTransaction(tx: Db, deps: WakeQueuePostgresAdapterDeps, db: Db, ru
 
     async getCommentSelfAuthorship({ companyId, issueId, finishingRunId, commentIds }) {
       const rows = await tx
-        .select({ createdByRunId: issueComments.createdByRunId })
+        .select({ createdByRunId: issueComments.createdByRunId, createdAt: issueComments.createdAt })
         .from(issueComments)
         .where(and(eq(issueComments.companyId, companyId), eq(issueComments.issueId, issueId), inArray(issueComments.id, commentIds)));
-      return { allSelfAuthored: rows.length > 0 && rows.every((row) => row.createdByRunId === finishingRunId) };
+      // A comment queued before a board/agent terminal disposition cannot
+      // override that newer decision when the finishing run drains its queue.
+      // Only a fresh comment after the latest actual terminal transition may
+      // reopen the issue. Historical rows without transition activity retain
+      // their existing behavior.
+      const [terminalTransition] = await tx
+        .select({ createdAt: activityLog.createdAt })
+        .from(activityLog)
+        .where(and(
+          eq(activityLog.companyId, companyId),
+          eq(activityLog.entityType, "issue"),
+          eq(activityLog.entityId, issueId),
+          eq(activityLog.action, "issue.updated"),
+          sql`${activityLog.details}->'changes'->'status'->>'to' in ('done', 'cancelled')`,
+        ))
+        .orderBy(desc(activityLog.createdAt))
+        .limit(1);
+      return {
+        allSelfAuthored: rows.length > 0 && rows.every((row) => row.createdByRunId === finishingRunId),
+        hasPostTerminalComment: !terminalTransition || rows.some((row) => row.createdAt > terminalTransition.createdAt),
+      };
     },
 
     async isCompletedDelegationMention({ companyId, issueId, finishingRunId, wakeAgentId, commentIds }) {

@@ -341,6 +341,7 @@ async function promoteDeferredWake(
     });
     shouldReopen =
       !selfAuthorship.allSelfAuthored &&
+      selfAuthorship.hasPostTerminalComment &&
       (workingCandidate.requestedByActorType === "user" ||
         workingCandidate.wakeReason === "issue_reopened_via_comment" ||
         (currentIssue.status === "done" &&
