@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { completeLmStudioTurn, probeLmStudioSplash } from "./model.js";
+import { completeLmStudioTurn, probeLmStudioSplash, readSplashDecodeTokens } from "./model.js";
 
 const packageId = "incoai/Qwen3.8-27B-Splash";
 const model = { id: "qwen3.8-27b-splash", root: packageId, owned_by: "splash" };
@@ -38,6 +38,12 @@ describe("LM Studio Splash model route", () => {
     expect(fetcher).toHaveBeenCalledOnce();
   });
 
+  it("reads the local decode counter without exposing generated text", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response({ metrics: { decode_output_tokens: 12345 } }));
+    await expect(readSplashDecodeTokens(fetcher)).resolves.toBe(12345);
+    expect(fetcher).toHaveBeenCalledWith("http://127.0.0.1:3321/status", expect.objectContaining({ method: "GET" }));
+  });
+
   it("parses a bounded tool response from the fixed chat endpoint", async () => {
     const fetcher = sizedFetcher(response({
       choices: [{ finish_reason: "tool_calls", message: { role: "assistant", content: null, tool_calls: [{
@@ -45,11 +51,13 @@ describe("LM Studio Splash model route", () => {
       }] } }],
       usage: { prompt_tokens: 12, completion_tokens: 4 },
     }));
+    const onTokenBudget = vi.fn();
     const result = await completeLmStudioTurn({
       messages: [{ role: "user", content: "Read the project" }],
       tools: [{ type: "function", function: { name: "read_file", description: "Read", parameters: { type: "object" } } }],
-      fetcher,
+      fetcher, onTokenBudget,
     });
+    expect(onTokenBudget).toHaveBeenCalledWith({ promptTokens: 100, maxOutputTokens: 222_722 });
     expect(result).toEqual({ content: null, toolCalls: [{ id: "call-1", name: "read_file", arguments: { path: "README.md" } }],
       usage: { inputTokens: 12, outputTokens: 4 } });
     expect(fetcher).toHaveBeenCalledWith("http://127.0.0.1:3321/v1/chat/completions", expect.objectContaining({

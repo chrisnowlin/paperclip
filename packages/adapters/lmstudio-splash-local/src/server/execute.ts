@@ -1,6 +1,6 @@
 import type { AdapterExecutionContext, AdapterExecutionResult } from "@paperclipai/adapter-utils";
 import { buildPaperclipEnv, joinPromptSections, renderPaperclipWakePrompt, selectPaperclipTaskMarkdown } from "@paperclipai/adapter-utils/server-utils";
-import { completeLmStudioTurn, LMSTUDIO_SPLASH_MODEL, probeLmStudioSplash, type LmStudioMessage } from "./model.js";
+import { completeLmStudioTurn, LMSTUDIO_SPLASH_MODEL, probeLmStudioSplash, readSplashDecodeTokens, type LmStudioMessage } from "./model.js";
 import { assertLmStudioSplashConfig } from "./profile.js";
 import { splashRunQueue } from "./run-queue.js";
 import { createLmStudioToolExecutor, InterruptedCodingCommandError, UncertainPaperclipMutationError } from "./tools.js";
@@ -61,7 +61,33 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       await probeLmStudioSplash(fetch, runSignal);
       if (!dispatched) { ctx.onDispatch?.(); dispatched = true; }
       await reportQueueStatus("Splash is generating locally; a turn can take several minutes.");
-      const turn = await completeLmStudioTurn({ messages, tools: executor.definitions, signal: runSignal });
+      const turnStarted = Date.now();
+      const decodeBaseline = await readSplashDecodeTokens(fetch, runSignal);
+      let budget: { promptTokens: number; maxOutputTokens: number } | null = null;
+      let lastGenerated = 0;
+      let turnActive = true;
+      let progressPending = false;
+      const progressTimer = setInterval(() => {
+        if (!turnActive || progressPending) return;
+        progressPending = true;
+        void (async () => {
+          const current = await readSplashDecodeTokens(fetch, runSignal);
+          if (!turnActive) return;
+          if (current !== null && decodeBaseline !== null) lastGenerated = Math.max(lastGenerated, current - decodeBaseline);
+          const elapsed = Math.max(1, Math.floor((Date.now() - turnStarted) / 60_000));
+          const count = decodeBaseline === null ? "token count unavailable" : `~${lastGenerated.toLocaleString("en-US")} output tokens`;
+          const limit = budget ? `, ${budget.promptTokens.toLocaleString("en-US")} prompt / ${budget.maxOutputTokens.toLocaleString("en-US")} output limit` : "";
+          await reportQueueStatus(`Splash generating locally: ${count}${limit} (${elapsed} min elapsed).`);
+        })().finally(() => { progressPending = false; });
+      }, 15_000);
+      progressTimer.unref();
+      let turn: Awaited<ReturnType<typeof completeLmStudioTurn>>;
+      try { turn = await completeLmStudioTurn({ messages, tools: executor.definitions, signal: runSignal,
+        onTokenBudget: async (measured) => {
+          budget = measured;
+          await reportQueueStatus(`Splash prompt: ${measured.promptTokens.toLocaleString("en-US")} tokens; output allowance: ${measured.maxOutputTokens.toLocaleString("en-US")} tokens.`);
+        } }); }
+      finally { turnActive = false; clearInterval(progressTimer); }
       inputTokens += turn.usage.inputTokens;
       outputTokens += turn.usage.outputTokens;
       if (turn.toolCalls.length === 0) {

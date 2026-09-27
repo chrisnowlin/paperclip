@@ -94,11 +94,24 @@ export async function probeLmStudioSplash(fetcher: typeof fetch = fetch, signal?
   return { modelId: LMSTUDIO_SPLASH_MODEL };
 }
 
+/** Splash reports a model-lifetime aggregate; callers display turn deltas as approximate. */
+export async function readSplashDecodeTokens(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<number | null> {
+  try {
+    const response = await fetcher(STATUS_URL, { method: "GET", redirect: "error", signal: requestSignal(signal, 2_000) });
+    if (!response.ok) return null;
+    const status = await readBoundedJson(response);
+    const metrics = isRecord(status) ? status.metrics : null;
+    const count = isRecord(metrics) ? metrics.decode_output_tokens : null;
+    return typeof count === "number" && Number.isSafeInteger(count) && count >= 0 ? count : null;
+  } catch { return null; }
+}
+
 export async function completeLmStudioTurn(input: {
   messages: LmStudioMessage[];
   tools: LmStudioToolDefinition[];
   signal?: AbortSignal;
   fetcher?: typeof fetch;
+  onTokenBudget?: (budget: { promptTokens: number; maxOutputTokens: number }) => void | Promise<void>;
 }): Promise<{ content: string | null; toolCalls: LmStudioToolCall[]; usage: { inputTokens: number; outputTokens: number } }> {
   const fetcher = input.fetcher ?? fetch;
   const sizingBody = JSON.stringify({
@@ -134,13 +147,15 @@ export async function completeLmStudioTurn(input: {
   }
   const remainingContext = SPLASH_CONTEXT_TOKEN_LIMIT - tokenized.tokens.length;
   if (remainingContext <= 0) throw new Error("Splash prompt fills the configured context window.");
+  const maxOutputTokens = Math.min(SPLASH_OUTPUT_TOKEN_BUDGET, remainingContext);
+  await input.onTokenBudget?.({ promptTokens: tokenized.tokens.length, maxOutputTokens });
   const payload = JSON.stringify({
     model: LMSTUDIO_SPLASH_MODEL,
     messages: input.messages,
     tools: input.tools,
     tool_choice: "auto",
     temperature: 0,
-    max_tokens: Math.min(SPLASH_OUTPUT_TOKEN_BUDGET, remainingContext),
+    max_tokens: maxOutputTokens,
     stream: false,
   });
   if (Buffer.byteLength(payload) > MAX_REQUEST_BYTES) throw new Error("Splash request exceeds the size limit.");
