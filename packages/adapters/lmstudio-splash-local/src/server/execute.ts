@@ -65,6 +65,8 @@ async function preflightLocalTaskAndWatchdog(input: {
   apiUrl: string;
   issueId: string | null;
   agentId: string;
+  companyId: string;
+  managerId: string | null;
   authToken: string;
   signal: AbortSignal;
 }): Promise<{ watchdogReady: boolean; skipReason: TaskSkipReason | null }> {
@@ -85,9 +87,22 @@ async function preflightLocalTaskAndWatchdog(input: {
     const existingResponse = await fetch(watchdogUrl.toString(), { headers, signal });
     if (!existingResponse.ok) return { watchdogReady: false, skipReason: null };
     if (await existingResponse.json() !== null) return { watchdogReady: true, skipReason: null };
+    let watchdogAgentId = input.agentId;
+    if (input.managerId && ISSUE_ID_PATTERN.test(input.managerId) && input.managerId !== input.agentId) {
+      try {
+        const managerResponse = await fetch(new URL(`api/agents/${input.managerId}`, base).toString(), { headers, signal });
+        if (managerResponse.ok) {
+          const manager = record(await managerResponse.json());
+          if (manager.id === input.managerId && manager.companyId === input.companyId &&
+            manager.adapterType === "lmstudio_splash_local" && manager.status === "active") {
+            watchdogAgentId = input.managerId;
+          }
+        }
+      } catch { /* an unavailable manager leaves the local worker as the fallback */ }
+    }
     const created = await fetch(watchdogUrl.toString(), { method: "PUT", signal,
       headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ agentId: input.agentId,
+      body: JSON.stringify({ agentId: watchdogAgentId,
         instructions: "Review this stopped local Splash task and its existing work. If the task is too broad or a run made no durable progress, preserve files, split the remaining work into one bounded local child with the same project workspace, set first-class dependencies, and record the decision. Verify before marking done. Do not retry the same scope indefinitely or route private source to a remote provider." }),
     });
     return { watchdogReady: created.ok, skipReason: null };
@@ -140,7 +155,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const issueId = typeof ctx.context.taskId === "string" ? ctx.context.taskId : null;
     const taskPreflight = await preflightLocalTaskAndWatchdog({
       apiUrl, issueId,
-      agentId: ctx.agent.id, authToken: ctx.authToken, signal: runSignal,
+      agentId: ctx.agent.id, companyId: ctx.agent.companyId,
+      managerId: ctx.agent.reportsTo ?? null, authToken: ctx.authToken, signal: runSignal,
     });
     if (taskPreflight.skipReason) {
       return skippedTaskResult(ctx, taskPreflight.skipReason, { inputTokens: 0, outputTokens: 0 });

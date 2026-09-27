@@ -12,6 +12,7 @@ export interface AdapterAgent {
   companyId: string;
   name: string;
   role?: string;
+  reportsTo?: string | null;
   adapterType: string | null;
   adapterConfig: unknown;
 }

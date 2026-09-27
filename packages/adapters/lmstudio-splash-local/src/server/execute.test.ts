@@ -250,9 +250,13 @@ describe("direct LM Studio Splash heartbeat", () => {
     const root = await workspace();
     const issueId = "8eab2670-f2b8-4d0c-8f95-d595a1c30f78";
     const agentId = "cc349b6e-bb92-45c3-b16c-e5f69c971015";
+    const managerId = "d88d62e4-f732-4374-9786-d4d4bb9d9098";
     const requests: Array<{ url: string; method: string; body: string | null }> = [];
     let existingWatchdog: unknown = null;
     let sourceOriginKind: string | null = null;
+    let reportsTo: string | null = null;
+    let managerAdapterType = "lmstudio_splash_local";
+    let managerCompanyId = "company-1";
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
       const method = init?.method ?? "GET";
       requests.push({ url, method, body: init?.body ? String(init.body) : null });
@@ -260,13 +264,16 @@ describe("direct LM Studio Splash heartbeat", () => {
       if (url.endsWith(`/api/issues/${issueId}/watchdog`)) {
         return new Response(JSON.stringify(method === "PUT" ? { id: "watchdog-new" } : existingWatchdog));
       }
+      if (url.endsWith(`/api/agents/${managerId}`)) return new Response(JSON.stringify({
+        id: managerId, companyId: managerCompanyId, adapterType: managerAdapterType, status: "active",
+      }));
       const readiness = splashReadiness(url);
       if (readiness) return readiness;
       return streamTurn(finalTurn);
     }));
     const run = () => execute({
       runId: "run-self-watch", agent: { id: agentId, companyId: "company-1", name: "Local", role: "engineer",
-        adapterType: "lmstudio_splash_local", adapterConfig: {} },
+        reportsTo, adapterType: "lmstudio_splash_local", adapterConfig: {} },
       runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
       config: { cwd: root }, context: { ...context(root), taskId: issueId },
       authToken: "private-run-token", onLog: async () => {},
@@ -277,6 +284,19 @@ describe("direct LM Studio Splash heartbeat", () => {
     expect(JSON.parse(writes[0]!.body!)).toMatchObject({ agentId });
     expect(writes[0]!.url).toContain(`/api/issues/${issueId}/watchdog`);
     expect(JSON.stringify(requests)).not.toContain("private-run-token");
+    reportsTo = managerId;
+    requests.length = 0;
+    await run();
+    expect(JSON.parse(requests.find((request) => request.method === "PUT")!.body!)).toMatchObject({ agentId: managerId });
+    managerAdapterType = "opencode_local";
+    requests.length = 0;
+    await run();
+    expect(JSON.parse(requests.find((request) => request.method === "PUT")!.body!)).toMatchObject({ agentId });
+    managerAdapterType = "lmstudio_splash_local";
+    managerCompanyId = "company-2";
+    requests.length = 0;
+    await run();
+    expect(JSON.parse(requests.find((request) => request.method === "PUT")!.body!)).toMatchObject({ agentId });
     existingWatchdog = { id: "named-watchdog", watchdogAgentId: "another-local-agent" };
     requests.length = 0;
     await run();
