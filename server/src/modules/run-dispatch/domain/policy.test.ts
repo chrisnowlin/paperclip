@@ -436,6 +436,18 @@ describe("decideQueuedRunStaleness", () => {
     expect(decideQueuedRunStaleness(facts, NOW)).toEqual({ stale: false });
   });
 
+  it.each(["done", "cancelled", "blocked", "in_review"])(
+    "cancels an automatic successful-run handoff after the issue becomes %s",
+    (issueStatus) => {
+      expect(decideQueuedRunStaleness({
+        ...baseStalenessFacts(),
+        issueStatus,
+        resumeIntent: true,
+        wakeReason: "finish_successful_run_handoff",
+      }, NOW)).toMatchObject({ stale: true, errorCode: "issue_not_in_progress" });
+    },
+  );
+
   it("allows a non-assignee workspace-busy retry to bypass the ownership check", () => {
     const facts: QueuedRunFacts = {
       ...baseStalenessFacts(),

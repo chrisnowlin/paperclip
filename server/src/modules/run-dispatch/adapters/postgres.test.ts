@@ -239,6 +239,26 @@ describeEmbeddedPostgres("run-dispatch postgres adapter", () => {
     expect((await db.select().from(issues).where(eq(issues.id, issueId)))[0]!.status).toBe("blocked");
   });
 
+  it("cancels an automatic disposition handoff after board completion despite resume intent", async () => {
+    const { companyId, agentId } = await seedCompanyAndAgent();
+    const issueId = randomUUID();
+    await seedIssue({ companyId, issueId, assigneeAgentId: agentId, status: "done" });
+    const runId = await seedRun({
+      companyId,
+      agentId,
+      status: "queued",
+      contextSnapshot: { issueId, wakeReason: "finish_successful_run_handoff", resumeIntent: true },
+    });
+
+    const adapter = createPostgresRunDispatchAdapter(db);
+    expect(await adapter.cancelStaleQueuedRun({
+      companyId,
+      runId,
+      expectedStatus: "queued",
+      now: new Date(),
+    })).toMatchObject({ outcome: "cancelled", errorCode: "issue_not_in_progress" });
+  });
+
   it.each(["queued", "final", "resolved"] as const)("rechecks late native replacement dependencies at %s dispatch", async mode => {
     const { companyId, agentId } = await seedCompanyAndAgent();
     const issueId = randomUUID(), blockerId = randomUUID();

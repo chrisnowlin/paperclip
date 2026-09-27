@@ -605,6 +605,18 @@ export function decideQueuedRunStaleness(
       details: { issueId: facts.issueId, currentExecutionRunId: facts.issueExecutionRunId, currentCheckoutRunId: facts.issueCheckoutRunId ?? null } };
   }
 
+  // This automatic wake exists only to choose a disposition for a source
+  // issue that was left in_progress. Its resumeIntent must not reopen a task
+  // the board or another run has already disposed of while it was queued.
+  if (facts.wakeReason === "finish_successful_run_handoff" && facts.issueStatus !== "in_progress") {
+    return {
+      stale: true,
+      errorCode: "issue_not_in_progress",
+      reason: `Cancelled because the successful-run handoff issue no longer needs a disposition (current status: ${facts.issueStatus})`,
+      details: { issueId: facts.issueId, currentStatus: facts.issueStatus },
+    };
+  }
+
   const requiresInProgress = facts.retryReasonKind === "max_turn_continuation";
   const statusOutcome = decideIssueStatus({
     status: facts.issueStatus,
