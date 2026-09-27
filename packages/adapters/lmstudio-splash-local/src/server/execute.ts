@@ -101,7 +101,7 @@ async function preflightLocalTaskAndWatchdog(input: {
       } catch { /* an unavailable manager leaves the local worker as the fallback */ }
     }
     const created = await fetch(watchdogUrl.toString(), { method: "PUT", signal,
-      headers: { ...headers, "Content-Type": "application/json" },
+      headers: { ...headers, "Content-Type": "application/json", "X-Paperclip-Create-Only": "true" },
       body: JSON.stringify({ agentId: watchdogAgentId,
         instructions: "Review this stopped local Splash task and its existing work. If the task is too broad or a run made no durable progress, preserve files, split the remaining work into one bounded local child with the same project workspace, set first-class dependencies, and record the decision. Verify before marking done. Do not retry the same scope indefinitely or route private source to a remote provider." }),
     });

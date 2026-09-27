@@ -48,6 +48,7 @@ type ActorFields = {
 export type IssueWatchdogUpsertInput = {
   agentId: string;
   instructions?: string | null;
+  createOnly?: boolean;
   actor?: ActorFields;
 };
 
@@ -824,9 +825,8 @@ export async function upsertIssueWatchdogForIssue(
   companyId: string,
   issueId: string,
   input: IssueWatchdogUpsertInput,
-): Promise<{ watchdog: IssueWatchdog; created: boolean }> {
+): Promise<{ watchdog: IssueWatchdog; created: boolean; unchanged?: boolean }> {
   await assertWatchedIssue(dbOrTx, companyId, issueId);
-  await assertWatchdogAgentInvokable(dbOrTx, companyId, input.agentId);
 
   const now = new Date();
   const existing = await dbOrTx
@@ -836,11 +836,15 @@ export async function upsertIssueWatchdogForIssue(
     .then((rows: IssueWatchdogRow[]) => rows[0] ?? null);
 
   if (existing) {
+    if (input.createOnly) return { watchdog: toIssueWatchdog(existing), created: false, unchanged: true };
+  }
+  await assertWatchdogAgentInvokable(dbOrTx, companyId, input.agentId);
+  if (existing) {
     const updated = await updateIssueWatchdogRow(dbOrTx, existing, input, now);
     return { watchdog: toIssueWatchdog(updated), created: false };
   }
 
-  const insertResult: { row: IssueWatchdogRow; created: boolean } = await dbOrTx
+  const insertResult: { row: IssueWatchdogRow; created: boolean; unchanged?: boolean } = await dbOrTx
     .insert(issueWatchdogs)
     .values({
       companyId,
@@ -867,10 +871,12 @@ export async function upsertIssueWatchdogForIssue(
         .where(and(eq(issueWatchdogs.companyId, companyId), eq(issueWatchdogs.issueId, issueId)))
         .then((rows: IssueWatchdogRow[]) => rows[0] ?? null);
       if (!winner) throw error;
+      if (input.createOnly) return { row: winner, created: false, unchanged: true };
       const updated = await updateIssueWatchdogRow(dbOrTx, winner, input, now);
       return { row: updated, created: false };
     });
-  return { watchdog: toIssueWatchdog(insertResult.row), created: insertResult.created };
+  return { watchdog: toIssueWatchdog(insertResult.row), created: insertResult.created,
+    ...("unchanged" in insertResult ? { unchanged: insertResult.unchanged } : {}) };
 }
 
 export function taskWatchdogService(db: Db, deps: TaskWatchdogServiceDeps = {}) {
@@ -1758,7 +1764,7 @@ export function taskWatchdogService(db: Db, deps: TaskWatchdogServiceDeps = {}) 
       companyId: string,
       issueId: string,
       input: IssueWatchdogUpsertInput,
-    ): Promise<{ watchdog: IssueWatchdog; created: boolean }> => {
+    ): Promise<{ watchdog: IssueWatchdog; created: boolean; unchanged?: boolean }> => {
       return upsertIssueWatchdogForIssue(db, companyId, issueId, input);
     },
 

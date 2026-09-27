@@ -340,6 +340,30 @@ describeEmbeddedPostgres("issue watchdog routes", () => {
     expect(stored[0]).toMatchObject({ status: "active", watchdogAgentId: agentId });
   });
 
+  it("does not replace a named watcher through automatic create-only registration", async () => {
+    const companyId = await seedCompany();
+    const issueId = await seedIssue(companyId, { createdAt: new Date() });
+    const namedAgentId = await seedAgent(companyId);
+    const fallbackAgentId = await seedAgent(companyId, { status: "paused" });
+    const app = createApp(companyId);
+
+    const named = await request(app).put(`/api/issues/${issueId}/watchdog`)
+      .send({ agentId: namedAgentId, instructions: "Board-selected reviewer." });
+    expect(named.status).toBe(200);
+    const automatic = await request(app).put(`/api/issues/${issueId}/watchdog`)
+      .set("X-Paperclip-Create-Only", "true")
+      .send({ agentId: fallbackAgentId, instructions: "Automatic fallback." });
+    expect(automatic.status).toBe(200);
+    expect(automatic.body).toMatchObject({
+      id: named.body.id,
+      watchdogAgentId: namedAgentId,
+      instructions: "Board-selected reviewer.",
+    });
+    const actions = await db.select({ action: activityLog.action }).from(activityLog)
+      .where(eq(activityLog.entityId, issueId));
+    expect(actions.filter((row) => row.action === "issue.watchdog_updated")).toHaveLength(0);
+  });
+
   it("creates an issue and watchdog atomically from the create issue route", async () => {
     const companyId = await seedCompany();
     const agentId = await seedAgent(companyId);

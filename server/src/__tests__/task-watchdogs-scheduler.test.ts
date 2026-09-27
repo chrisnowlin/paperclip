@@ -23,7 +23,7 @@ import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
-import { taskWatchdogService } from "../services/task-watchdogs.ts";
+import { taskWatchdogService, upsertIssueWatchdogForIssue } from "../services/task-watchdogs.ts";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -167,6 +167,26 @@ describeEmbeddedPostgres("task watchdog scheduler", () => {
     });
     return { service, wakes };
   }
+
+  it("keeps an existing named watcher when automatic registration is create-only", async () => {
+    const companyId = await seedCompany();
+    const sourceId = await seedIssue(companyId, { status: "todo" });
+    const namedAgentId = await seedAgent(companyId);
+    const fallbackAgentId = await seedAgent(companyId, { status: "paused" });
+    const original = await seedWatchdog(companyId, sourceId, namedAgentId);
+
+    const result = await upsertIssueWatchdogForIssue(db, companyId, sourceId, {
+      agentId: fallbackAgentId,
+      instructions: "Automatic fallback must not replace the board choice.",
+      createOnly: true,
+    });
+
+    expect(result).toMatchObject({ created: false, unchanged: true });
+    expect(result.watchdog.watchdogAgentId).toBe(namedAgentId);
+    const [persisted] = await db.select().from(issueWatchdogs).where(eq(issueWatchdogs.id, original!.id));
+    expect(persisted?.watchdogAgentId).toBe(namedAgentId);
+    expect(persisted?.instructions).toBe(original?.instructions);
+  });
 
   it("creates one reusable watchdog issue and wakes the watchdog on the initial stopped state", async () => {
     const companyId = await seedCompany();

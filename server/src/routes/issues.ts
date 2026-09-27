@@ -8975,12 +8975,15 @@ export function issueRoutes(
         issue.companyId,
         issue.id,
       );
-      const { watchdog, created } = await taskWatchdogsSvc.upsertForIssue(
+      const { watchdog, created, unchanged } = await taskWatchdogsSvc.upsertForIssue(
         issue.companyId,
         issue.id,
         {
           agentId: req.body.agentId,
           instructions: req.body.instructions,
+          // Automatic adapter registration must not replace a board-selected
+          // watcher that appeared after the adapter's initial GET.
+          createOnly: req.header("x-paperclip-create-only") === "true",
           actor: {
             agentId: actor.agentId,
             userId: actor.actorType === "user" ? actor.actorId : null,
@@ -8988,6 +8991,10 @@ export function issueRoutes(
           },
         },
       );
+      if (unchanged) {
+        res.json(watchdog);
+        return;
+      }
       await logActivity(db, {
         companyId: issue.companyId,
         actorType: actor.actorType,

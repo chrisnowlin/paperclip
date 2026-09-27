@@ -251,7 +251,7 @@ describe("direct LM Studio Splash heartbeat", () => {
     const issueId = "8eab2670-f2b8-4d0c-8f95-d595a1c30f78";
     const agentId = "cc349b6e-bb92-45c3-b16c-e5f69c971015";
     const managerId = "d88d62e4-f732-4374-9786-d4d4bb9d9098";
-    const requests: Array<{ url: string; method: string; body: string | null }> = [];
+    const requests: Array<{ url: string; method: string; body: string | null; createOnly: string | null }> = [];
     let existingWatchdog: unknown = null;
     let sourceOriginKind: string | null = null;
     let reportsTo: string | null = null;
@@ -259,7 +259,8 @@ describe("direct LM Studio Splash heartbeat", () => {
     let managerCompanyId = "company-1";
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
       const method = init?.method ?? "GET";
-      requests.push({ url, method, body: init?.body ? String(init.body) : null });
+      requests.push({ url, method, body: init?.body ? String(init.body) : null,
+        createOnly: new Headers(init?.headers).get("X-Paperclip-Create-Only") });
       if (url.endsWith(`/api/issues/${issueId}`)) return new Response(JSON.stringify({ id: issueId, originKind: sourceOriginKind }));
       if (url.endsWith(`/api/issues/${issueId}/watchdog`)) {
         return new Response(JSON.stringify(method === "PUT" ? { id: "watchdog-new" } : existingWatchdog));
@@ -283,6 +284,7 @@ describe("direct LM Studio Splash heartbeat", () => {
     expect(writes).toHaveLength(1);
     expect(JSON.parse(writes[0]!.body!)).toMatchObject({ agentId });
     expect(writes[0]!.url).toContain(`/api/issues/${issueId}/watchdog`);
+    expect(writes[0]!.createOnly).toBe("true");
     expect(JSON.stringify(requests)).not.toContain("private-run-token");
     reportsTo = managerId;
     requests.length = 0;
