@@ -11,6 +11,8 @@ const MAX_OUTPUT_BYTES = 65_536;
 const MAX_HTTP_BYTES = 65_536;
 const MAX_ARGUMENTS = 64;
 const MAX_COMMAND_MS = 300_000;
+const GLM_FLASH_MODEL = "zai-coding-plan/glm-5.3-flash";
+const MAX_CTO_HIRES_PER_RUN = 3;
 
 export class UncertainPaperclipMutationError extends Error {
   constructor() { super("Paperclip request outcome is uncertain; do not retry this mutation automatically."); }
@@ -31,6 +33,20 @@ export const LMSTUDIO_TOOL_DEFINITIONS: LmStudioToolDefinition[] = [
   { type: "function", function: { name: "paperclip_request", description: "Call Paperclip with run auth. GET /api/companies/{companyId}/issues or /agents, /api/issues/{issueId} or /comments, or /api/agents/me; POST /api/companies/{companyId}/issues or /api/issues/{issueId}/comments; PATCH /api/issues/{issueId}; PUT /api/issues/{issueId}/watchdog. Task creation requires body.idempotencyKey. Issue access remains company-authorized by Paperclip.",
     parameters: { ...object, properties: { method: { type: "string", enum: ["GET", "POST", "PATCH", "PUT"] }, path: { type: "string" }, body: { type: "object" } }, required: ["method", "path"] } } },
 ];
+
+const CTO_HIRE_TOOL_DEFINITION: LmStudioToolDefinition = {
+  type: "function",
+  function: {
+    name: "hire_coder",
+    description: "CTO only. Hire one coder under your reporting line. Choose exactly one explicit route: app-managed local Splash, or the configured OpenCode GLM 5.3 Flash model. No Claude/OpenAI account, provider fallback, or credential copy. At most three new hires per run; record each task-to-agent route decision in its issue.",
+    parameters: { ...object, properties: {
+      name: { type: "string" },
+      title: { type: "string" },
+      capabilities: { type: "string" },
+      route: { type: "string", enum: ["splash_local", "glm_5_3_flash"] },
+    }, required: ["name", "capabilities", "route"] },
+  },
+};
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -197,6 +213,8 @@ export async function createLmStudioToolExecutor(input: {
   signal?: AbortSignal;
   fetcher?: typeof fetch;
   onSpawn?: (meta: { pid: number; processGroupId: number | null; startedAt: string }) => Promise<void>;
+  ctoAgentId?: string;
+  glmOpenCodeCommand?: string;
 }): Promise<{ definitions: LmStudioToolDefinition[]; execute(call: LmStudioToolCall): Promise<string> }> {
   if (!path.isAbsolute(input.workspace)) throw new Error("The selected workspace must be absolute.");
   const root = await fs.realpath(input.workspace);
@@ -206,8 +224,35 @@ export async function createLmStudioToolExecutor(input: {
   if (!(["http:", "https:"].includes(api.protocol)) || api.username || api.password || !input.authToken) {
     throw new Error("Paperclip runtime API or run credential is unavailable.");
   }
+  let newHireCount = 0;
+  async function requestPaperclip(method: "GET" | "POST" | "PATCH" | "PUT", requestPath: string,
+    body?: Record<string, unknown>): Promise<string> {
+    const encoded = method === "GET" ? undefined : JSON.stringify(body);
+    if (encoded && Buffer.byteLength(encoded) > MAX_HTTP_BYTES) throw new Error("Paperclip request body exceeds the size limit.");
+    const headers: Record<string, string> = { Authorization: `Bearer ${input.authToken}` };
+    if (method !== "GET") { headers["Content-Type"] = "application/json"; headers["X-Paperclip-Run-Id"] = input.runId; }
+    let response: Response;
+    try {
+      response = await (input.fetcher ?? fetch)(new URL(requestPath, api).toString(), {
+        method, headers, body: encoded, redirect: "error",
+        signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
+      });
+    } catch {
+      if (method === "GET") throw new Error("Paperclip read failed.");
+      throw new UncertainPaperclipMutationError();
+    }
+    const text = await boundedText(response).catch(() => {
+      if (method === "GET") throw new Error("Paperclip read failed.");
+      throw new UncertainPaperclipMutationError();
+    });
+    if (!response.ok) {
+      if (method !== "GET" && response.status >= 500) throw new UncertainPaperclipMutationError();
+      throw new Error(`Paperclip request failed with HTTP ${response.status}: ${text.slice(0, 1024)}`);
+    }
+    return text;
+  }
   return {
-    definitions: LMSTUDIO_TOOL_DEFINITIONS,
+    definitions: input.ctoAgentId ? [...LMSTUDIO_TOOL_DEFINITIONS, CTO_HIRE_TOOL_DEFINITION] : LMSTUDIO_TOOL_DEFINITIONS,
     async execute(call) {
       if (input.signal?.aborted) throw new Error("Run cancelled.");
       if (!record(call.arguments)) throw new Error("Tool arguments must be an object.");
@@ -239,6 +284,62 @@ export async function createLmStudioToolExecutor(input: {
         }
         case "run_command":
           return await runCommand({ root, args: call.arguments, signal: input.signal, onSpawn: input.onSpawn });
+        case "hire_coder": {
+          if (!input.ctoAgentId) throw new Error("Only the CTO can hire coders from this local run.");
+          const name = textArg(call.arguments.name, "Coder name", 80).trim();
+          const capabilities = textArg(call.arguments.capabilities, "Coder capabilities", 1_000).trim();
+          const title = call.arguments.title === undefined ? null : textArg(call.arguments.title, "Coder title", 120).trim();
+          if (name.length < 2 || capabilities.length < 12) throw new Error("Coder name or capabilities are too short.");
+          const route = call.arguments.route;
+          if (route !== "splash_local" && route !== "glm_5_3_flash") throw new Error("Coder route is not allowed.");
+          const adapterType = route === "splash_local" ? "lmstudio_splash_local" : "opencode_local";
+          const agentPath = `/api/companies/${encodeURIComponent(input.companyId)}/agents`;
+          const existingRaw = await requestPaperclip("GET", agentPath);
+          let existingAgents: unknown;
+          try { existingAgents = JSON.parse(existingRaw); }
+          catch { throw new Error("Could not confirm existing company agents before hiring."); }
+          if (!Array.isArray(existingAgents)) throw new Error("Could not confirm existing company agents before hiring.");
+          const existing = existingAgents.find((agent) => record(agent) &&
+            typeof agent.name === "string" && agent.name.toLowerCase() === name.toLowerCase());
+          if (existing) {
+            const found = existing as Record<string, unknown>;
+            const metadata = record(found.metadata) ? found.metadata : {};
+            if (found.companyId === input.companyId && found.reportsTo === input.ctoAgentId &&
+              found.adapterType === adapterType && metadata.localHiringRoute === route && typeof found.id === "string") {
+              return JSON.stringify({ id: found.id, name, route, adapterType, reused: true });
+            }
+            throw new Error("A company agent already has this name; choose a distinct coder name.");
+          }
+          if (newHireCount >= MAX_CTO_HIRES_PER_RUN) throw new Error("CTO hiring limit for this run reached.");
+          const opencodeCommand = input.glmOpenCodeCommand ?? path.join(os.homedir(), ".opencode", "bin", "opencode");
+          const adapterConfig = route === "splash_local" ? {} : {
+            model: GLM_FLASH_MODEL,
+            command: opencodeCommand,
+            timeoutSec: 600,
+          };
+          if (route === "glm_5_3_flash") {
+            if (!path.isAbsolute(opencodeCommand)) throw new Error("Configured OpenCode executable path is invalid.");
+            const cli = await fs.stat(opencodeCommand).catch(() => null);
+            if (!cli?.isFile()) throw new Error("Configured OpenCode executable for GLM 5.3 Flash is unavailable.");
+          }
+          const createdRaw = await requestPaperclip("POST", agentPath, {
+            name, title, role: "engineer", capabilities, reportsTo: input.ctoAgentId,
+            adapterType, adapterConfig,
+            runtimeConfig: { heartbeat: { enabled: false, wakeOnDemand: true, maxConcurrentRuns: 1 } },
+            metadata: { localHiringRoute: route, hiredByAgentId: input.ctoAgentId, hiringRunId: input.runId },
+          });
+          let created: unknown;
+          try { created = JSON.parse(createdRaw); }
+          catch { throw new UncertainPaperclipMutationError(); }
+          if (!record(created) || typeof created.id !== "string" || created.companyId !== input.companyId ||
+              created.adapterType !== adapterType || created.reportsTo !== input.ctoAgentId) {
+            throw new UncertainPaperclipMutationError();
+          }
+          newHireCount += 1;
+          return JSON.stringify({ id: created.id, name, route, adapterType,
+            model: route === "glm_5_3_flash" ? GLM_FLASH_MODEL : "incoai/Qwen3.8-27B-Splash",
+            reused: false, next: "Assign a project-bound task explicitly and record this route decision on the task." });
+        }
         case "paperclip_request": {
           const method = call.arguments.method;
           if (method !== "GET" && method !== "POST" && method !== "PATCH" && method !== "PUT") throw new Error("Paperclip method is invalid.");
@@ -249,29 +350,7 @@ export async function createLmStudioToolExecutor(input: {
               (!record(body) || typeof body.idempotencyKey !== "string" || !body.idempotencyKey.trim())) {
             throw new Error("Task creation requires an idempotency key.");
           }
-          const encoded = method === "GET" ? undefined : JSON.stringify(body);
-          if (encoded && Buffer.byteLength(encoded) > MAX_HTTP_BYTES) throw new Error("Paperclip request body exceeds the size limit.");
-          const headers: Record<string, string> = { Authorization: `Bearer ${input.authToken}` };
-          if (method !== "GET") { headers["Content-Type"] = "application/json"; headers["X-Paperclip-Run-Id"] = input.runId; }
-          let response: Response;
-          try {
-            response = await (input.fetcher ?? fetch)(new URL(requestPath, api).toString(), {
-              method, headers, body: encoded, redirect: "error",
-              signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
-            });
-          } catch {
-            if (method === "GET") throw new Error("Paperclip read failed.");
-            throw new UncertainPaperclipMutationError();
-          }
-          const text = await boundedText(response).catch(() => {
-            if (method === "GET") throw new Error("Paperclip read failed.");
-            throw new UncertainPaperclipMutationError();
-          });
-          if (!response.ok) {
-            if (method !== "GET" && response.status >= 500) throw new UncertainPaperclipMutationError();
-            throw new Error(`Paperclip request failed with HTTP ${response.status}: ${text.slice(0, 1024)}`);
-          }
-          return text;
+          return requestPaperclip(method, requestPath, record(body) ? body : undefined);
         }
         default:
           throw new Error("Tool is not available for this run.");

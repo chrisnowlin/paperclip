@@ -193,4 +193,64 @@ describe("Paperclip-owned LM Studio coding tools", () => {
       body: { status: "done" } }))).rejects.toThrow("uncertain");
     expect(fetcher).toHaveBeenCalledOnce();
   });
+
+  it("offers CTO-only hiring with explicit Splash or GLM 5.3 Flash routes", async () => {
+    const root = await workspace();
+    const opencodeCommand = path.join(root, "opencode-test");
+    await writeFile(opencodeCommand, "test executable");
+    const ctoAgentId = "11111111-1111-4111-8111-111111111111";
+    const posts: Record<string, unknown>[] = [];
+    const created: Record<string, unknown>[] = [];
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+      if (init?.method === "GET") return new Response(JSON.stringify(created));
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      posts.push(body);
+      const agent = { id: `${posts.length}2222222-2222-4222-8222-222222222222`, companyId: "company-1", ...body };
+      created.push(agent);
+      return new Response(JSON.stringify(agent));
+    });
+    const ordinary = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-1",
+      authToken: "private-run-token", apiUrl: "http://127.0.0.1:3319", fetcher });
+    expect(ordinary.definitions.map((tool) => tool.function.name)).not.toContain("hire_coder");
+    await expect(ordinary.execute(call("hire_coder", { name: "Fast QA", route: "glm_5_3_flash",
+      capabilities: "Audits browser interactions" }))).rejects.toThrow("Only the CTO");
+    expect(fetcher).not.toHaveBeenCalled();
+
+    const cto = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-cto",
+      authToken: "private-run-token", apiUrl: "http://127.0.0.1:3319", fetcher,
+      ctoAgentId, glmOpenCodeCommand: opencodeCommand });
+    expect(cto.definitions.map((tool) => tool.function.name)).toContain("hire_coder");
+    const splash = JSON.parse(await cto.execute(call("hire_coder", {
+      name: "Private Coder", route: "splash_local", capabilities: "Private TypeScript code and focused tests",
+    }))) as Record<string, unknown>;
+    const glm = JSON.parse(await cto.execute(call("hire_coder", {
+      name: "Fast QA", route: "glm_5_3_flash", capabilities: "Public browser QA and short research",
+    }))) as Record<string, unknown>;
+    expect(splash).toMatchObject({ route: "splash_local", adapterType: "lmstudio_splash_local", reused: false });
+    expect(glm).toMatchObject({ route: "glm_5_3_flash", adapterType: "opencode_local",
+      model: "zai-coding-plan/glm-5.3-flash", reused: false });
+    expect(posts).toHaveLength(2);
+    expect(posts[0]).toMatchObject({ role: "engineer", reportsTo: ctoAgentId,
+      adapterType: "lmstudio_splash_local", adapterConfig: {},
+      metadata: { localHiringRoute: "splash_local", hiredByAgentId: ctoAgentId, hiringRunId: "run-cto" } });
+    expect(posts[1]).toMatchObject({ role: "engineer", reportsTo: ctoAgentId,
+      adapterType: "opencode_local", adapterConfig: { model: "zai-coding-plan/glm-5.3-flash",
+        command: opencodeCommand } });
+    expect(JSON.stringify(posts)).not.toContain("private-run-token");
+    expect(JSON.stringify(posts)).not.toContain("OPENAI_API_KEY");
+    const reused = JSON.parse(await cto.execute(call("hire_coder", {
+      name: "Private Coder", route: "splash_local", capabilities: "Private TypeScript code and focused tests",
+    }))) as Record<string, unknown>;
+    expect(reused).toMatchObject({ route: "splash_local", reused: true });
+    expect(posts).toHaveLength(2);
+    await cto.execute(call("hire_coder", {
+      name: "Reef Specialist", route: "splash_local", capabilities: "Private 2D simulation and gameplay tests",
+    }));
+    await expect(cto.execute(call("hire_coder", {
+      name: "Fourth Coder", route: "splash_local", capabilities: "Additional private implementation work",
+    }))).rejects.toThrow("hiring limit");
+    expect(posts).toHaveLength(3);
+    await expect(cto.execute(call("hire_coder", { name: "Wrong route", route: "claude",
+      capabilities: "Unsupported provider route" }))).rejects.toThrow("not allowed");
+  });
 });

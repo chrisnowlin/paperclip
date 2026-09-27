@@ -389,6 +389,9 @@ describe("direct LM Studio Splash heartbeat", () => {
     expect(system).toContain("named account binding");
     expect(system).toContain("project workspace");
     expect(system).toContain("task watchdog");
+    expect(system).toContain("hire_coder");
+    expect((requests[0]?.tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name))
+      .toContain("hire_coder");
     expect(system).toContain("Keep the parent blocked on unfinished children");
     expect(system).toContain("compare each original parent acceptance criterion with the child scopes");
     expect(logs.join("")).not.toContain("PRIVATE_LOCAL_REASONING");
