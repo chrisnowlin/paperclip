@@ -444,7 +444,12 @@ describe("decideQueuedRunStaleness", () => {
         issueStatus,
         resumeIntent: true,
         wakeReason: "finish_successful_run_handoff",
-      }, NOW)).toMatchObject({ stale: true, errorCode: "issue_not_in_progress" });
+      }, NOW)).toMatchObject({
+        stale: true,
+        errorCode: issueStatus === "done" || issueStatus === "cancelled"
+          ? "issue_terminal_status"
+          : "issue_not_in_progress",
+      });
     },
   );
 

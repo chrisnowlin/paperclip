@@ -256,7 +256,7 @@ describeEmbeddedPostgres("run-dispatch postgres adapter", () => {
       runId,
       expectedStatus: "queued",
       now: new Date(),
-    })).toMatchObject({ outcome: "cancelled", errorCode: "issue_not_in_progress" });
+    })).toMatchObject({ outcome: "cancelled", errorCode: "issue_terminal_status" });
   });
 
   it.each(["queued", "final", "resolved"] as const)("rechecks late native replacement dependencies at %s dispatch", async mode => {

@@ -609,9 +609,10 @@ export function decideQueuedRunStaleness(
   // issue that was left in_progress. Its resumeIntent must not reopen a task
   // the board or another run has already disposed of while it was queued.
   if (facts.wakeReason === "finish_successful_run_handoff" && facts.issueStatus !== "in_progress") {
+    const terminal = facts.issueStatus === "done" || facts.issueStatus === "cancelled";
     return {
       stale: true,
-      errorCode: "issue_not_in_progress",
+      errorCode: terminal ? "issue_terminal_status" : "issue_not_in_progress",
       reason: `Cancelled because the successful-run handoff issue no longer needs a disposition (current status: ${facts.issueStatus})`,
       details: { issueId: facts.issueId, currentStatus: facts.issueStatus },
     };
