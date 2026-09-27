@@ -65,6 +65,28 @@ function context(root: string) {
 }
 
 describe("direct LM Studio Splash heartbeat", () => {
+  it.each(["done", "blocked"] as const)("does not consume the model slot for a %s task that changed while queued", async (status) => {
+    const root = await workspace();
+    const issueId = "8eab2670-f2b8-4d0c-8f95-d595a1c30f78";
+    const fetcher = vi.fn(async (url: string) => {
+      if (url.endsWith(`/api/issues/${issueId}`)) return new Response(JSON.stringify({ id: issueId, status }));
+      throw new Error(`Unexpected model or control-plane request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const logs: string[] = [];
+    const result = await execute({
+      runId: "run-stale", agent: { id: "agent-1", companyId: "company-1", name: "Local",
+        adapterType: "lmstudio_splash_local", adapterConfig: {} },
+      runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+      config: { cwd: root }, context: { ...context(root), taskId: issueId },
+      authToken: "private-run-token", onLog: async (_stream, value) => { logs.push(value); },
+    });
+    expect(result).toMatchObject({ exitCode: 0, resultJson: { skippedStaleTask: status } });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(logs.join("")).toContain("skipped_stale_task");
+    expect(logs.join("")).not.toContain("private-run-token");
+  });
+
   it("allows slow local generation until both the time and output thresholds are reached", () => {
     expect(actionlessTurnExhausted(9 * 60_000, 2_000, 0)).toBe(false);
     expect(actionlessTurnExhausted(7 * 60_000, 25_000, 0)).toBe(false);

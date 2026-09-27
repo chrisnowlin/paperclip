@@ -24,14 +24,14 @@ function record(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-async function ensureLocalTaskWatchdog(input: {
+async function preflightLocalTaskAndWatchdog(input: {
   apiUrl: string;
   issueId: string | null;
   agentId: string;
   authToken: string;
   signal: AbortSignal;
-}): Promise<boolean> {
-  if (!input.issueId || !ISSUE_ID_PATTERN.test(input.issueId)) return true;
+}): Promise<{ watchdogReady: boolean; skipReason: "done" | "cancelled" | "blocked" | "reassigned" | null }> {
+  if (!input.issueId || !ISSUE_ID_PATTERN.test(input.issueId)) return { watchdogReady: true, skipReason: null };
   const signal = AbortSignal.any([input.signal, AbortSignal.timeout(WATCHDOG_SETUP_TIMEOUT_MS)]);
   const base = input.apiUrl.endsWith("/") ? input.apiUrl : `${input.apiUrl}/`;
   const issueUrl = new URL(`api/issues/${input.issueId}`, base);
@@ -39,21 +39,27 @@ async function ensureLocalTaskWatchdog(input: {
   const headers = { Authorization: `Bearer ${input.authToken}` };
   try {
     const sourceResponse = await fetch(issueUrl.toString(), { headers, signal });
-    if (!sourceResponse.ok) return false;
+    if (!sourceResponse.ok) return { watchdogReady: false, skipReason: null };
     const source = record(await sourceResponse.json());
-    if (source.id !== input.issueId || source.originKind === "task_watchdog" ||
-        source.status === "done" || source.status === "cancelled") return true;
+    if (source.id !== input.issueId) return { watchdogReady: false, skipReason: null };
+    if (source.status === "done" || source.status === "cancelled" || source.status === "blocked") {
+      return { watchdogReady: true, skipReason: source.status };
+    }
+    if (typeof source.assigneeAgentId === "string" && source.assigneeAgentId !== input.agentId) {
+      return { watchdogReady: true, skipReason: "reassigned" };
+    }
+    if (source.originKind === "task_watchdog") return { watchdogReady: true, skipReason: null };
     const existingResponse = await fetch(watchdogUrl.toString(), { headers, signal });
-    if (!existingResponse.ok) return false;
-    if (await existingResponse.json() !== null) return true;
+    if (!existingResponse.ok) return { watchdogReady: false, skipReason: null };
+    if (await existingResponse.json() !== null) return { watchdogReady: true, skipReason: null };
     const created = await fetch(watchdogUrl.toString(), { method: "PUT", signal,
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({ agentId: input.agentId,
         instructions: "Review this stopped local Splash task and its existing work. If the task is too broad or a run made no durable progress, preserve files, split the remaining work into one bounded local child with the same project workspace, set first-class dependencies, and record the decision. Verify before marking done. Do not retry the same scope indefinitely or route private source to a remote provider." }),
     });
-    return created.ok;
+    return { watchdogReady: created.ok, skipReason: null };
   } catch {
-    return false;
+    return { watchdogReady: false, skipReason: null };
   }
 }
 
@@ -90,11 +96,20 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ? AbortSignal.any([ctx.signal, AbortSignal.timeout(MAX_RUN_MS)])
       : AbortSignal.timeout(MAX_RUN_MS);
     const apiUrl = buildPaperclipEnv(ctx.agent).PAPERCLIP_API_URL;
-    const selfWatchdogReady = await ensureLocalTaskWatchdog({
+    const taskPreflight = await preflightLocalTaskAndWatchdog({
       apiUrl, issueId: typeof ctx.context.taskId === "string" ? ctx.context.taskId : null,
       agentId: ctx.agent.id, authToken: ctx.authToken, signal: runSignal,
     });
-    if (!selfWatchdogReady) {
+    if (taskPreflight.skipReason) {
+      await ctx.onLog("stdout", `${JSON.stringify({ type: "skipped_stale_task", reason: taskPreflight.skipReason })}\n`);
+      return { exitCode: 0, signal: null, timedOut: false, provider: "splash", biller: "local",
+        model: LMSTUDIO_SPLASH_MODEL, billingType: "fixed", costUsd: 0, usageBasis: "per_run",
+        usage: { inputTokens: 0, outputTokens: 0 }, sessionId: null, sessionParams: null,
+        sessionDisplayId: null, clearSession: true,
+        summary: `The task became ${taskPreflight.skipReason} while waiting for local Splash; no model turn was sent.`,
+        resultJson: { skippedStaleTask: taskPreflight.skipReason } };
+    }
+    if (!taskPreflight.watchdogReady) {
       await reportQueueStatus("Local task watchdog setup was unavailable; this run continues and task recovery needs review.");
     }
     const executor = await createLmStudioToolExecutor({ workspace: cwd, companyId: ctx.agent.companyId,
