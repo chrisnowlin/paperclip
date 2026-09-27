@@ -81,7 +81,10 @@ function parseModelProvider(model: string | null): string | null {
   return trimmed.slice(0, trimmed.indexOf("/")).trim() || null;
 }
 
-function resolveOpenCodeBiller(env: Record<string, string>, provider: string | null): string {
+export function resolveOpenCodeBiller(env: Record<string, string>, provider: string | null): string {
+  // An unrelated OpenRouter key in the host environment cannot relabel an
+  // explicitly selected Z.ai Coding Plan model or imply an account fallback.
+  if (provider === "zai-coding-plan") return provider;
   return inferOpenAiCompatibleBiller(env, null) ?? provider ?? "unknown";
 }
 

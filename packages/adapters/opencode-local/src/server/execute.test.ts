@@ -8,10 +8,16 @@ vi.mock("@paperclipai/adapter-utils/execution-target", async (importOriginal) =>
   return { ...actual, runAdapterExecutionTargetProcess: vi.fn() };
 });
 
-import { ensureRemoteOpenCodeModelConfiguredAndAvailable, execute } from "./execute.js";
+import { ensureRemoteOpenCodeModelConfiguredAndAvailable, execute, resolveOpenCodeBiller } from "./execute.js";
 import { runAdapterExecutionTargetProcess } from "@paperclipai/adapter-utils/execution-target";
 
 const runProcessMock = vi.mocked(runAdapterExecutionTargetProcess);
+
+it("keeps explicit Z.ai Coding Plan billing attribution despite an unrelated OpenRouter key", () => {
+  const env = { OPENROUTER_API_KEY: "fixture-key" };
+  expect(resolveOpenCodeBiller(env, "zai-coding-plan")).toBe("zai-coding-plan");
+  expect(resolveOpenCodeBiller(env, "openai")).toBe("openrouter");
+});
 
 async function createSkillDir(root: string, name: string): Promise<string> {
   const skillDir = path.join(root, name);
