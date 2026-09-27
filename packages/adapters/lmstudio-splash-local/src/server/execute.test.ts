@@ -87,6 +87,26 @@ describe("direct LM Studio Splash heartbeat", () => {
     expect(logs.join("")).not.toContain("private-run-token");
   });
 
+  it("skips an unresolved blocker even when the issue status was projected in progress", async () => {
+    const root = await workspace();
+    const issueId = "8eab2670-f2b8-4d0c-8f95-d595a1c30f78";
+    const fetcher = vi.fn(async (url: string) => {
+      if (url.endsWith(`/api/issues/${issueId}`)) return new Response(JSON.stringify({ id: issueId,
+        status: "in_progress", blockedBy: [{ id: "blocker-1", status: "in_progress" }] }));
+      throw new Error(`Unexpected model or control-plane request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const result = await execute({
+      runId: "run-blocked", agent: { id: "agent-1", companyId: "company-1", name: "Local",
+        adapterType: "lmstudio_splash_local", adapterConfig: {} },
+      runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+      config: { cwd: root }, context: { ...context(root), taskId: issueId },
+      authToken: "private-run-token", onLog: async () => {},
+    });
+    expect(result).toMatchObject({ resultJson: { skippedStaleTask: "blocked" }, usage: { outputTokens: 0 } });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
   it("allows slow local generation until both the time and output thresholds are reached", () => {
     expect(actionlessTurnExhausted(9 * 60_000, 2_000, 0)).toBe(false);
     expect(actionlessTurnExhausted(7 * 60_000, 25_000, 0)).toBe(false);

@@ -702,9 +702,12 @@ already assigned by the company is preserved. Watchdog-origin issues never
 register another watchdog, so review cannot recurse. Setup failure is shown in
 the run's live status and does not prevent productive work. The local adapter
 re-reads the issue after acquiring its one-model queue slot; if the issue is
-done, cancelled, blocked, or reassigned, it records a metadata-only skipped
-task result and sends no model turn. This closes the gap where a queued local
-run outlives its assignment or a newly added dependency. The adapter
+done, cancelled, blocked, reassigned, or still has an unresolved first-class
+blocker despite a temporary `in_progress` projection, it records a
+metadata-only skipped task result and sends no model turn. This prevents an
+inappropriate local model dispatch; the control plane remains responsible for
+releasing the wait and restoring a live path when the blocker actually resolves.
+The adapter
 also ends an individual inference turn that has spent at least eight minutes
 and about 20,000 generated tokens without returning a task tool action. It
 records only the count, elapsed time, and step as a `scope_stall` run event;

@@ -42,6 +42,11 @@ async function preflightLocalTaskAndWatchdog(input: {
     if (!sourceResponse.ok) return { watchdogReady: false, skipReason: null };
     const source = record(await sourceResponse.json());
     if (source.id !== input.issueId) return { watchdogReady: false, skipReason: null };
+    // Dependency state is authoritative even if a concurrent wake briefly
+    // projects the issue as in_progress while its blocker is still unresolved.
+    if (Array.isArray(source.blockedBy) && source.blockedBy.some((blocker) => record(blocker).status !== "done")) {
+      return { watchdogReady: true, skipReason: "blocked" };
+    }
     if (source.status === "done" || source.status === "cancelled" || source.status === "blocked") {
       return { watchdogReady: true, skipReason: source.status };
     }
