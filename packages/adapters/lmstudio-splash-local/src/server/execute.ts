@@ -6,11 +6,17 @@ import { splashRunQueue } from "./run-queue.js";
 import { createLmStudioToolExecutor, InterruptedCodingCommandError, UncertainPaperclipMutationError } from "./tools.js";
 
 const MAX_TOOL_CALLS = 48;
-const MAX_RUN_MS = 25 * 60 * 1_000;
-const MAX_QUEUE_WAIT_MS = 25 * 60 * 1_000;
+const MAX_RUN_MS = 2 * 60 * 60 * 1_000;
+const MAX_QUEUE_WAIT_MS = 2 * 60 * 60 * 1_000;
 
 function record(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function systemGuidance(role: string | undefined): string {
+  const base = "You are a local Paperclip coding agent. Use the provided tools for workspace and task actions. Never request credentials or alternate model endpoints. Keep local task details with app-managed Splash agents; do not assign a child to a remote or paid-provider agent without explicit board authorization and a named account binding. Report completed work clearly.";
+  if (role === "cto" || role === "ceo") return `${base} As a coordinator, first inspect the current issue and existing child issues. When a request combines multiple independently verifiable deliverables, create at most three narrow child issues with explicit assignees, one deliverable and one acceptance check each. Record the task-to-agent decision in a parent comment and set dependencies so the work builds toward completion. Do not duplicate existing children or implement their work yourself in this coordination turn. Use an idempotency key for every task creation.`;
+  return `${base} Complete one scoped deliverable at a time. If the assignment spans several independent deliverables, report the split needed to the coordinator before starting unrelated work.`;
 }
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
@@ -49,7 +55,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     await ctx.onMeta?.({ adapterType: "lmstudio_splash_local", command: "Bundled Splash local API", cwd,
       commandNotes: ["Fixed model and loopback endpoint; no provider session or paid account."], prompt });
     const messages: LmStudioMessage[] = [
-      { role: "system", content: "You are a local Paperclip coding agent. Use the provided tools for workspace and task actions. Never request credentials or alternate model endpoints. Report completed work clearly." },
+      { role: "system", content: systemGuidance(ctx.agent.role) },
       { role: "user", content: prompt },
     ];
     let inputTokens = 0;
@@ -65,6 +71,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       const decodeBaseline = await readSplashDecodeTokens(fetch, runSignal);
       let budget: { promptTokens: number; maxOutputTokens: number } | null = null;
       let lastGenerated = 0;
+      let reasoningTail = "";
       let turnActive = true;
       let progressPending = false;
       const progressTimer = setInterval(() => {
@@ -75,14 +82,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           if (!turnActive) return;
           if (current !== null && decodeBaseline !== null) lastGenerated = Math.max(lastGenerated, current - decodeBaseline);
           const elapsed = Math.max(1, Math.floor((Date.now() - turnStarted) / 60_000));
-          const count = decodeBaseline === null ? "token count unavailable" : `~${lastGenerated.toLocaleString("en-US")} output tokens`;
-          const limit = budget ? `, ${budget.promptTokens.toLocaleString("en-US")} prompt / ${budget.maxOutputTokens.toLocaleString("en-US")} output limit` : "";
-          await reportQueueStatus(`Splash generating locally: ${count}${limit} (${elapsed} min elapsed).`);
+          const count = decodeBaseline === null ? "token count unavailable" : `~${lastGenerated.toLocaleString("en-US")} generated tokens`;
+          const limit = budget ? ` / ${budget.maxOutputTokens.toLocaleString("en-US")} allowance` : "";
+          const excerpt = reasoningTail.replace(/\s+/g, " ").trim().slice(-90);
+          await reportQueueStatus(`Splash ${count}${limit} · ${elapsed}m${excerpt ? ` · thinking: ${excerpt}` : ""}`);
         })().finally(() => { progressPending = false; });
       }, 15_000);
       progressTimer.unref();
       let turn: Awaited<ReturnType<typeof completeLmStudioTurn>>;
-      try { turn = await completeLmStudioTurn({ messages, tools: executor.definitions, signal: runSignal,
+      try { turn = await completeLmStudioTurn({ messages, tools: executor.definitions, signal: runSignal, stream: true,
+        onReasoningDelta: (delta) => { reasoningTail = (reasoningTail + delta).slice(-160); },
         onTokenBudget: async (measured) => {
           budget = measured;
           await reportQueueStatus(`Splash prompt: ${measured.promptTokens.toLocaleString("en-US")} tokens; output allowance: ${measured.maxOutputTokens.toLocaleString("en-US")} tokens.`);

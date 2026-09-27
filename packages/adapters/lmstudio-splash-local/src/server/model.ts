@@ -12,6 +12,8 @@ const MAX_TOKENIZE_RESPONSE_BYTES = 2_000_000;
 const MAX_REQUEST_BYTES = 524_288;
 const MAX_CONTENT_CHARS = 65_536;
 const MAX_TOOL_CALLS = 4;
+const MAX_STREAM_BYTES = 64_000_000;
+const MAX_STREAM_FRAME_CHARS = 131_072;
 // Splash's non-streaming Chat response can take longer than Node fetch's
 // 300-second header deadline. Keep this dispatcher scoped to loopback Splash.
 const splashChatDispatcher = new Agent({ headersTimeout: 1_560_000, bodyTimeout: 1_560_000 });
@@ -106,12 +108,101 @@ export async function readSplashDecodeTokens(fetcher: typeof fetch = fetch, sign
   } catch { return null; }
 }
 
+async function readSplashStream(response: Response, onReasoningDelta?: (delta: string) => void): Promise<unknown> {
+  if (!response.body) throw new Error("Splash returned an empty stream.");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const calls = new Map<number, { id?: string; type?: string; name?: string; arguments: string }>();
+  let frameBuffer = "";
+  let bytes = 0;
+  let content = "";
+  let finishReason: string | null = null;
+  let usage: Record<string, unknown> = {};
+  let done = false;
+  const acceptFrame = (frame: string) => {
+    const data = frame.split("\n").filter((line) => line.startsWith("data: "))
+      .map((line) => line.slice(6)).join("\n");
+    if (!data) return;
+    if (data === "[DONE]") { done = true; return; }
+    let event: unknown;
+    try { event = JSON.parse(data) as unknown; }
+    catch { throw new Error("Splash stream returned malformed JSON."); }
+    if (!isRecord(event)) throw new Error("Splash stream event is malformed.");
+    if (isRecord(event.error)) {
+      const code = event.error.code;
+      throw new Error(typeof code === "string" && /^[a-z_]{1,64}$/.test(code)
+        ? `Splash streaming inference failed (${code}); no alternate provider was tried.`
+        : "Splash streaming inference failed; no alternate provider was tried.");
+    }
+    if (isRecord(event.usage)) usage = event.usage;
+    if (!Array.isArray(event.choices) || event.choices.length === 0) return;
+    const choice = event.choices[0];
+    if (!isRecord(choice)) throw new Error("Splash stream choice is malformed.");
+    if (typeof choice.finish_reason === "string") {
+      if (finishReason && finishReason !== choice.finish_reason) throw new Error("Splash stream finish reason changed.");
+      finishReason = choice.finish_reason;
+    }
+    const delta = choice.delta;
+    if (!isRecord(delta)) return;
+    if (typeof delta.reasoning_content === "string") {
+      try { onReasoningDelta?.(delta.reasoning_content); } catch { /* progress cannot interrupt inference */ }
+    }
+    if (typeof delta.content === "string") {
+      content += delta.content;
+      if (content.length > MAX_CONTENT_CHARS) throw new Error("Splash completion content is invalid.");
+    }
+    if (delta.tool_calls === undefined) return;
+    if (!Array.isArray(delta.tool_calls)) throw new Error("Splash stream tool calls are malformed.");
+    for (const raw of delta.tool_calls) {
+      if (!isRecord(raw) || !Number.isSafeInteger(raw.index) || (raw.index as number) < 0 ||
+          (raw.index as number) >= MAX_TOOL_CALLS) throw new Error("Splash stream tool index is invalid.");
+      const index = raw.index as number;
+      const call = calls.get(index) ?? { arguments: "" };
+      if (typeof raw.id === "string") call.id = raw.id;
+      if (typeof raw.type === "string") call.type = raw.type;
+      if (isRecord(raw.function)) {
+        if (typeof raw.function.name === "string") call.name = raw.function.name;
+        if (typeof raw.function.arguments === "string") call.arguments += raw.function.arguments;
+      }
+      if (call.arguments.length > 65_536) throw new Error("Splash stream tool arguments exceed the size limit.");
+      calls.set(index, call);
+    }
+  };
+  try {
+    while (!done) {
+      const next = await reader.read();
+      if (next.done) break;
+      bytes += next.value.byteLength;
+      if (bytes > MAX_STREAM_BYTES) throw new Error("Splash stream exceeds the size limit.");
+      frameBuffer += decoder.decode(next.value, { stream: true });
+      let boundary: number;
+      while ((boundary = frameBuffer.indexOf("\n\n")) >= 0) {
+        const frame = frameBuffer.slice(0, boundary);
+        frameBuffer = frameBuffer.slice(boundary + 2);
+        acceptFrame(frame);
+        if (done) break;
+      }
+      if (frameBuffer.length > MAX_STREAM_FRAME_CHARS) throw new Error("Splash stream frame exceeds the size limit.");
+    }
+  } finally {
+    if (done) await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+  if (!done || finishReason === null) throw new Error("Splash stream ended before completion; no partial tools were run.");
+  return { choices: [{ finish_reason: finishReason, message: { role: "assistant", content: content || null,
+    tool_calls: [...calls.entries()].sort(([a], [b]) => a - b).map(([, call]) => ({
+      id: call.id, type: call.type, function: { name: call.name, arguments: call.arguments },
+    })) } }], usage };
+}
+
 export async function completeLmStudioTurn(input: {
   messages: LmStudioMessage[];
   tools: LmStudioToolDefinition[];
   signal?: AbortSignal;
   fetcher?: typeof fetch;
   onTokenBudget?: (budget: { promptTokens: number; maxOutputTokens: number }) => void | Promise<void>;
+  stream?: boolean;
+  onReasoningDelta?: (delta: string) => void;
 }): Promise<{ content: string | null; toolCalls: LmStudioToolCall[]; usage: { inputTokens: number; outputTokens: number } }> {
   const fetcher = input.fetcher ?? fetch;
   const sizingBody = JSON.stringify({
@@ -156,7 +247,8 @@ export async function completeLmStudioTurn(input: {
     tool_choice: "auto",
     temperature: 0,
     max_tokens: maxOutputTokens,
-    stream: false,
+    stream: input.stream === true,
+    ...(input.stream ? { stream_options: { include_usage: true } } : {}),
   });
   if (Buffer.byteLength(payload) > MAX_REQUEST_BYTES) throw new Error("Splash request exceeds the size limit.");
   const signal = requestSignal(input.signal, 1_500_000);
@@ -176,7 +268,12 @@ export async function completeLmStudioTurn(input: {
     throw new Error("App-owned Splash inference is unavailable or timed out; no alternate provider was tried.");
   }
   if (!response.ok) throw new Error(`Splash inference failed with HTTP ${response.status}; no alternate provider was tried.`);
-  const body = await readBoundedJson(response);
+  let body: unknown;
+  try { body = input.stream ? await readSplashStream(response, input.onReasoningDelta) : await readBoundedJson(response); }
+  catch (error) {
+    if (signal.aborted) throw new Error("App-owned Splash turn was cancelled or exceeded its 25-minute local limit; no alternate provider was tried.");
+    throw error;
+  }
   const choice = isRecord(body) && Array.isArray(body.choices) ? body.choices[0] : null;
   const message = isRecord(choice) ? choice.message : null;
   if (!isRecord(message)) throw new Error("Splash completion is malformed.");

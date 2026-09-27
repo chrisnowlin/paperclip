@@ -15,6 +15,7 @@ Use when:
 - This agent should run the local Qwen3.8 27B Splash model through V2's bundled Splash server at 127.0.0.1:3321.
 - Paperclip should own the coding and task tool loop without OpenCode, Codex, or a paid provider account.
 - The agent is a local-trusted owner, including delegated child tasks.
+- A CTO/CEO role should coordinate broad work into at most three narrow child issues with named local assignees before implementation.
 
 Do not use when:
 - The reviewer must run in a sandbox; this adapter is local-only.
@@ -24,4 +25,5 @@ Do not use when:
 The model and endpoint are fixed. There are no login, API key, alternate provider, or fallback settings.
 Paperclip's run JWT remains outside the model prompt and is used only for approved task tools.
 Coding commands execute with the local server user's authority in the assigned workspace.
+Live long-turn status can show a short local reasoning excerpt and approximate token count; the excerpt is not written to the run log. Partial streamed tool calls are never executed.
 `;

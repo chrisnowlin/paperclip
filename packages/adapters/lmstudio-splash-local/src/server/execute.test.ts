@@ -37,6 +37,22 @@ const toolTurn = { choices: [{ finish_reason: "tool_calls", message: { role: "as
 }] } }], usage: { prompt_tokens: 10, completion_tokens: 3 } };
 const finalTurn = { choices: [{ finish_reason: "stop", message: { role: "assistant", content: "Delegated task acknowledged." } }],
   usage: { prompt_tokens: 14, completion_tokens: 5 } };
+function streamTurn(turn: { choices: Array<{ finish_reason: string; message: {
+  content: string | null; tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
+} }>; usage?: { prompt_tokens: number; completion_tokens: number } }, reasoning?: string): Response {
+  const choice = turn.choices[0]!;
+  const events: unknown[] = [{ choices: [{ delta: { role: "assistant", content: "" }, finish_reason: null }] }];
+  if (reasoning) events.push({ choices: [{ delta: { reasoning_content: reasoning }, finish_reason: null }] });
+  if (choice.message.content) events.push({ choices: [{ delta: { content: choice.message.content }, finish_reason: null }] });
+  choice.message.tool_calls?.forEach((call, index) => events.push({ choices: [{ delta: { tool_calls: [{ index,
+    id: call.id, type: call.type, function: { name: call.function.name, arguments: call.function.arguments },
+  }] }, finish_reason: null }] }));
+  events.push({ choices: [{ delta: {}, finish_reason: choice.finish_reason }] });
+  if (turn.usage) events.push({ choices: [], usage: turn.usage });
+  events.push("[DONE]");
+  return new Response(events.map((event) => `data: ${typeof event === "string" ? event : JSON.stringify(event)}\n\n`).join(""),
+    { status: 200, headers: { "Content-Type": "text/event-stream" } });
+}
 
 function context(root: string) {
   return {
@@ -48,6 +64,30 @@ function context(root: string) {
 }
 
 describe("direct LM Studio Splash heartbeat", () => {
+  it("routes broad CTO work toward named, bounded child assignments", async () => {
+    const root = await workspace();
+    const requests: Array<Record<string, unknown>> = [];
+    const logs: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const readiness = splashReadiness(url);
+      if (readiness) return readiness;
+      requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return streamTurn(finalTurn, "PRIVATE_LOCAL_REASONING");
+    }));
+    await execute({
+      runId: "run-cto", agent: { id: "agent-cto", companyId: "company-1", name: "CTO", role: "cto",
+        adapterType: "lmstudio_splash_local", adapterConfig: {} },
+      runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+      config: { cwd: root }, context: context(root), authToken: "run-token", onLog: async (_stream, value) => { logs.push(value); },
+    });
+    const system = (requests[0]?.messages as Array<{ content: string }>)[0]?.content ?? "";
+    expect(system).toContain("at most three narrow child issues");
+    expect(system).toContain("explicit assignees");
+    expect(system).toContain("idempotency key");
+    expect(system).toContain("named account binding");
+    expect(logs.join("")).not.toContain("PRIVATE_LOCAL_REASONING");
+  });
+
   it("serializes two agents through one model slot and reports the wait", async () => {
     const root = await workspace();
     let releaseFirst!: () => void;
@@ -61,7 +101,7 @@ describe("direct LM Studio Splash heartbeat", () => {
       if (readiness) { if (url.endsWith("/v1/models")) modelProbes += 1; return readiness; }
       completions += 1;
       if (completions === 1) { startedFirst(); await firstTurnHeld; }
-      return new Response(JSON.stringify(finalTurn));
+      return streamTurn(finalTurn);
     }));
     const progress: string[] = [];
     const dispatches: string[] = [];
@@ -105,7 +145,7 @@ describe("direct LM Studio Splash heartbeat", () => {
       requests.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
       const readiness = splashReadiness(url);
       if (readiness) return readiness;
-      if (url.endsWith("/v1/chat/completions")) return new Response(JSON.stringify(requests.filter((item) => item.url.endsWith("/v1/chat/completions")).length === 1 ? toolTurn : finalTurn), { status: 200 });
+      if (url.endsWith("/v1/chat/completions")) return streamTurn(requests.filter((item) => item.url.endsWith("/v1/chat/completions")).length === 1 ? toolTurn : finalTurn);
       throw new Error("Unexpected URL");
     }));
     const logs: string[] = [];
@@ -149,7 +189,7 @@ describe("direct LM Studio Splash heartbeat", () => {
       const readiness = splashReadiness(url);
       if (readiness) return readiness;
       requests.push(JSON.parse(String(init?.body)));
-      return new Response(JSON.stringify(finalTurn), { status: 200 });
+      return streamTurn(finalTurn);
     }));
     const result = await execute({
       runId: "run-comment", agent: { id: "agent-1", companyId: "company-1", name: "Local", adapterType: "lmstudio_splash_local", adapterConfig: {} },
@@ -168,7 +208,7 @@ describe("direct LM Studio Splash heartbeat", () => {
     const root = await workspace();
     const cancelled = new AbortController();
     cancelled.abort();
-    const fetcher = vi.fn(async (url: string) => splashReadiness(url) ?? new Response(JSON.stringify(toolTurn), { status: 200 }));
+    const fetcher = vi.fn(async (url: string) => splashReadiness(url) ?? streamTurn(toolTurn));
     vi.stubGlobal("fetch", fetcher);
     const base = {
       runId: "run-3", agent: { id: "agent-1", companyId: "company-1", name: "Local", adapterType: "lmstudio_splash_local", adapterConfig: {} },
@@ -188,7 +228,7 @@ describe("direct LM Studio Splash heartbeat", () => {
         command: "node", args: ["-e", "setTimeout(()=>{},1000)"], timeoutMs: 30,
       }) },
     }] } }] };
-    const fetcher = vi.fn(async (url: string) => splashReadiness(url) ?? new Response(JSON.stringify(commandTurn), { status: 200 }));
+    const fetcher = vi.fn(async (url: string) => splashReadiness(url) ?? streamTurn(commandTurn));
     vi.stubGlobal("fetch", fetcher);
     await expect(execute({
       runId: "run-4", agent: { id: "agent-1", companyId: "company-1", name: "Local", adapterType: "lmstudio_splash_local", adapterConfig: {} },

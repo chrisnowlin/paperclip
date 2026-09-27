@@ -5,6 +5,9 @@ const packageId = "incoai/Qwen3.8-27B-Splash";
 const model = { id: "qwen3.8-27b-splash", root: packageId, owned_by: "splash" };
 const status = { maximum_context_tokens: 222_822, instance: { model: packageId, host: "127.0.0.1", port: 3321 } };
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+const streamResponse = (events: unknown[]) => new Response(events.map((event) =>
+  `data: ${typeof event === "string" ? event : JSON.stringify(event)}\n\n`).join(""),
+{ status: 200, headers: { "Content-Type": "text/event-stream" } });
 const sizedFetcher = (completion: Response, promptTokens = 100) => vi.fn<typeof fetch>(async (url) =>
   String(url).endsWith("/apply-template") ? response({ prompt: "rendered prompt" })
     : String(url).endsWith("/tokenize") ? response({ tokens: Array(promptTokens).fill(1) })
@@ -115,5 +118,47 @@ describe("LM Studio Splash model route", () => {
     });
     await expect(completeLmStudioTurn({ messages: [], tools: [], fetcher })).rejects.toThrow("response headers exceeded");
     expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it("streams a bounded reasoning excerpt but returns only the completed answer", async () => {
+    const onReasoningDelta = vi.fn();
+    const fetcher = sizedFetcher(streamResponse([
+      { choices: [{ delta: { role: "assistant", content: "" }, finish_reason: null }] },
+      { choices: [{ delta: { reasoning_content: "Checking the board rules. " }, finish_reason: null }] },
+      { choices: [{ delta: { content: "Done." }, finish_reason: null }] },
+      { choices: [{ delta: {}, finish_reason: "stop" }] },
+      { choices: [], usage: { prompt_tokens: 100, completion_tokens: 50 } },
+      "[DONE]",
+    ]));
+    await expect(completeLmStudioTurn({ messages: [], tools: [], fetcher, stream: true, onReasoningDelta })).resolves.toEqual({
+      content: "Done.", toolCalls: [], usage: { inputTokens: 100, outputTokens: 50 },
+    });
+    expect(onReasoningDelta).toHaveBeenCalledWith("Checking the board rules. ");
+    const sent = JSON.parse(String(fetcher.mock.calls[2]?.[1]?.body));
+    expect(sent.stream).toBe(true);
+    expect(sent.stream_options).toEqual({ include_usage: true });
+  });
+
+  it("assembles streamed tool deltas and withholds them until the final marker", async () => {
+    const fetcher = sizedFetcher(streamResponse([
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: "call-1", type: "function", function: { name: "write_file" } }] }, finish_reason: null }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{"path":' } }] }, finish_reason: null }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"RESULT.txt","content":"ok"}' } }] }, finish_reason: null }] },
+      { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+      { choices: [], usage: { prompt_tokens: 8, completion_tokens: 9 } },
+      "[DONE]",
+    ]));
+    await expect(completeLmStudioTurn({ messages: [], tools: [], fetcher, stream: true })).resolves.toEqual({
+      content: null,
+      toolCalls: [{ id: "call-1", name: "write_file", arguments: { path: "RESULT.txt", content: "ok" } }],
+      usage: { inputTokens: 8, outputTokens: 9 },
+    });
+  });
+
+  it("rejects an interrupted stream without releasing a partial tool call", async () => {
+    const fetcher = sizedFetcher(streamResponse([
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: "call-1", type: "function", function: { name: "write_file", arguments: "{" } }] }, finish_reason: null }] },
+    ]));
+    await expect(completeLmStudioTurn({ messages: [], tools: [], fetcher, stream: true })).rejects.toThrow("stream ended before completion");
   });
 });
