@@ -174,11 +174,15 @@ describe("Paperclip-owned LM Studio coding tools", () => {
     const tools = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-1",
       authToken: "run-token", apiUrl: "http://127.0.0.1:3319", fetcher });
     await tools.execute(call("paperclip_request", { method: "GET", path: `/api/issues/${issueId}` }));
+    await tools.execute(call("paperclip_request", { method: "GET", path: `/api/issues/${issueId}/attachments` }));
+    await tools.execute(call("paperclip_request", { method: "GET", path: `/api/issues/${issueId}/work-products` }));
     await tools.execute(call("paperclip_request", { method: "PATCH", path: `/api/issues/${issueId}`, body: { status: "in_progress" } }));
     await tools.execute(call("paperclip_request", { method: "POST", path: `/api/issues/${issueId}/comments`, body: { body: "Update" } }));
     await tools.execute(call("paperclip_request", { method: "GET", path: `/api/agents/${agentId}` }));
     expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
       `http://127.0.0.1:3319/api/issues/${issueId}`,
+      `http://127.0.0.1:3319/api/issues/${issueId}/attachments`,
+      `http://127.0.0.1:3319/api/issues/${issueId}/work-products`,
       `http://127.0.0.1:3319/api/issues/${issueId}`,
       `http://127.0.0.1:3319/api/issues/${issueId}/comments`,
       `http://127.0.0.1:3319/api/agents/${agentId}`,

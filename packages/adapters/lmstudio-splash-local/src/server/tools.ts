@@ -33,7 +33,7 @@ export const LMSTUDIO_TOOL_DEFINITIONS: LmStudioToolDefinition[] = [
     parameters: { ...object, properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } } },
   { type: "function", function: { name: "run_command", description: "Run a finite argv command in the assigned local-trusted workspace. No shell is added. Maximum 300 seconds and 64 KiB combined output; timeout or excess output aborts the entire agent run. Use narrow commands and never start a persistent dev server here.",
     parameters: { ...object, properties: { command: { type: "string" }, args: { type: "array", items: { type: "string" } }, timeoutMs: { type: "integer" } }, required: ["command"] } } },
-  { type: "function", function: { name: "paperclip_request", description: "Call Paperclip with run auth. GET /api/companies/{companyId}/issues or /agents, /api/issues/{issueId} or /comments, /api/agents/{agentId}, or /api/agents/me; POST /api/companies/{companyId}/issues, /api/issues/{parentId}/children, or /api/issues/{issueId}/comments; PATCH /api/issues/{issueId}; PUT /api/issues/{issueId}/watchdog. For child tasks use POST /api/issues/{parentId}/children with body.idempotencyKey and blockParentUntilDone=true so the blocker is atomic. CTO hiring uses hire_coder. Paperclip still enforces company and actor access.",
+  { type: "function", function: { name: "paperclip_request", description: "Call Paperclip with run auth. GET /api/companies/{companyId}/issues or /agents, /api/issues/{issueId}, /api/issues/{issueId}/comments, /attachments, or /work-products, /api/agents/{agentId}, or /api/agents/me; POST /api/companies/{companyId}/issues, /api/issues/{parentId}/children, or /api/issues/{issueId}/comments; PATCH /api/issues/{issueId}; PUT /api/issues/{issueId}/watchdog. For child tasks use POST /api/issues/{parentId}/children with body.idempotencyKey and blockParentUntilDone=true so the blocker is atomic. CTO hiring uses hire_coder. Paperclip still enforces company and actor access.",
     parameters: { ...object, properties: { method: { type: "string", enum: ["GET", "POST", "PATCH", "PUT"] }, path: { type: "string" }, body: { type: "object" } }, required: ["method", "path"] } } },
 ];
 
@@ -212,11 +212,12 @@ function allowedPaperclipPath(raw: unknown, companyId: string, method: string): 
   const agentPath = `${companyPrefix}/agents`;
   const issueDetail = /^\/api\/issues\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(url.pathname);
   const issueComments = /^\/api\/issues\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/comments$/i.test(url.pathname);
+  const issueDeliverables = /^\/api\/issues\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/(?:attachments|work-products)$/i.test(url.pathname);
   const issueWatchdog = /^\/api\/issues\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/watchdog$/i.test(url.pathname);
   const issueChildren = /^\/api\/issues\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/children$/i.test(url.pathname);
   const agentDetail = /^\/api\/agents\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(url.pathname);
   if (method === "GET" && (url.pathname === issuePath || url.pathname === agentPath ||
-      issueDetail || issueComments || agentDetail || url.pathname === "/api/agents/me")) return requested;
+      issueDetail || issueComments || (issueDeliverables && !url.search) || agentDetail || url.pathname === "/api/agents/me")) return requested;
   if (method === "POST" && (url.pathname === issuePath || issueComments || issueChildren)) return requested;
   if (method === "PATCH" && issueDetail) return requested;
   if (method === "PUT" && issueWatchdog) return requested;
