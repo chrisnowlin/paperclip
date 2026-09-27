@@ -16,7 +16,7 @@ export function executionBlockerPredicate() {
 
 export async function getExecutionBlocker(db: Db, companyId: string, issueId: string, options?: { conversationResetCommentId?: string | null }): Promise<ExecutionBlocker | null> {
   const [conversation] = await db.select({ agentId: issues.conversationAgentId,
-    boundaryId: issues.conversationBoundaryCommentId }).from(issues).where(and(
+    boundaryId: issues.conversationBoundaryCommentId, status: issues.status }).from(issues).where(and(
     eq(issues.companyId, companyId), eq(issues.id, issueId),
   )).limit(1);
   // A persisted user /new is an ordered context command, not a retry of uncertain work.
@@ -43,6 +43,11 @@ export async function getExecutionBlocker(db: Db, companyId: string, issueId: st
     boundary ? gt(issueRecoveryActions.createdAt, boundary.createdAt) : undefined,
   )).orderBy(desc(issueRecoveryActions.updatedAt), desc(issueRecoveryActions.id)).limit(1);
   if (!action) return null;
+  // A board-accepted terminal task cannot be admitted for replay. Keep the
+  // settled no-replay record for audit and reapply it if the task is reopened,
+  // while active unresolved recovery actions remain visible even when done.
+  if ((conversation?.status === "done" || conversation?.status === "cancelled") &&
+    (action.status === "resolved" || action.status === "cancelled")) return null;
   const parsedRunId = z.string().guid().safeParse(action.evidence.runId ?? action.evidence.sourceRunId);
   const runId = parsedRunId.success ? parsedRunId.data : null;
   const [run] = runId ? await db.select({ agentId: heartbeatRuns.agentId }).from(heartbeatRuns).where(and(
