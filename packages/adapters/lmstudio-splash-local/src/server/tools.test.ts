@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -200,6 +200,7 @@ describe("Paperclip-owned LM Studio coding tools", () => {
     await mkdir(hireWorkspaceRoot);
     const opencodeCommand = path.join(root, "opencode-test");
     await writeFile(opencodeCommand, "test executable");
+    await chmod(opencodeCommand, 0o700);
     const ctoAgentId = "11111111-1111-4111-8111-111111111111";
     const posts: Record<string, unknown>[] = [];
     const created: Record<string, unknown>[] = [];
@@ -242,6 +243,10 @@ describe("Paperclip-owned LM Studio coding tools", () => {
     expect(await realpath(path.join(hireWorkspaceRoot, "private-coder"))).toBe(path.join(canonicalHireRoot, "private-coder"));
     expect(JSON.stringify(posts)).not.toContain("private-run-token");
     expect(JSON.stringify(posts)).not.toContain("OPENAI_API_KEY");
+    (created[1]!.adapterConfig as Record<string, unknown>).model = "different-model";
+    await expect(cto.execute(call("hire_coder", {
+      name: "Fast QA", route: "glm_5_3_flash", capabilities: "Public browser QA and short research",
+    }))).rejects.toThrow("already has this name");
     const reused = JSON.parse(await cto.execute(call("hire_coder", {
       name: "Private Coder", route: "splash_local", capabilities: "Private TypeScript code and focused tests",
     }))) as Record<string, unknown>;

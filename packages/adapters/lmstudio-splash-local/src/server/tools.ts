@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -305,8 +306,11 @@ export async function createLmStudioToolExecutor(input: {
           if (existing) {
             const found = existing as Record<string, unknown>;
             const metadata = record(found.metadata) ? found.metadata : {};
+            const existingConfig = record(found.adapterConfig) ? found.adapterConfig : {};
             if (found.companyId === input.companyId && found.reportsTo === input.ctoAgentId &&
-              found.adapterType === adapterType && metadata.localHiringRoute === route && typeof found.id === "string") {
+              found.adapterType === adapterType && metadata.localHiringRoute === route && typeof found.id === "string" &&
+              found.status !== "terminated" &&
+              (route === "splash_local" || existingConfig.model === GLM_FLASH_MODEL)) {
               return JSON.stringify({ id: found.id, name, route, adapterType, reused: true });
             }
             throw new Error("A company agent already has this name; choose a distinct coder name.");
@@ -333,6 +337,9 @@ export async function createLmStudioToolExecutor(input: {
             if (!path.isAbsolute(opencodeCommand)) throw new Error("Configured OpenCode executable path is invalid.");
             const cli = await fs.stat(opencodeCommand).catch(() => null);
             if (!cli?.isFile()) throw new Error("Configured OpenCode executable for GLM 5.3 Flash is unavailable.");
+            await fs.access(opencodeCommand, fsConstants.X_OK).catch(() => {
+              throw new Error("Configured OpenCode executable for GLM 5.3 Flash is not executable.");
+            });
           }
           try { await fs.mkdir(hireCwd, { mode: 0o700 }); }
           catch (error) {
