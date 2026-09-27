@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { completeLmStudioTurn, probeLmStudioSplash, readSplashDecodeTokens } from "./model.js";
+import { completeLmStudioTurn, probeLmStudioSplash, readSplashDecodeTokens, readSplashProgress } from "./model.js";
 
 const packageId = "incoai/Qwen3.8-27B-Splash";
 const model = { id: "qwen3.8-27b-splash", root: packageId, owned_by: "splash" };
@@ -45,6 +45,16 @@ describe("LM Studio Splash model route", () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response({ metrics: { decode_output_tokens: 12345 } }));
     await expect(readSplashDecodeTokens(fetcher)).resolves.toBe(12345);
     expect(fetcher).toHaveBeenCalledWith("http://127.0.0.1:3321/status", expect.objectContaining({ method: "GET" }));
+  });
+
+  it("reports Splash prefill separately from decoded tokens", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response({
+      scheduler: { prefilling: 1, decoding: 0 },
+      metrics: { prefill_input_tokens: 2048, decode_output_tokens: 0 },
+    }));
+    await expect(readSplashProgress(fetcher)).resolves.toEqual({
+      prefillTokens: 2048, decodeTokens: 0, prefilling: true,
+    });
   });
 
   it("parses a bounded tool response from the fixed chat endpoint", async () => {

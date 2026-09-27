@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { AdapterExecutionContext, AdapterExecutionResult, RuntimeStatusPhase } from "@paperclipai/adapter-utils";
 import { buildPaperclipEnv, joinPromptSections, renderPaperclipWakePrompt, selectPaperclipTaskMarkdown } from "@paperclipai/adapter-utils/server-utils";
-import { completeLmStudioTurn, LMSTUDIO_SPLASH_MODEL, probeLmStudioSplash, readSplashDecodeTokens, type LmStudioMessage } from "./model.js";
+import { completeLmStudioTurn, LMSTUDIO_SPLASH_MODEL, probeLmStudioSplash, readSplashProgress, type LmStudioMessage } from "./model.js";
 import { assertLmStudioSplashConfig } from "./profile.js";
 import { splashRunQueue } from "./run-queue.js";
 import { createLmStudioToolExecutor, InterruptedCodingCommandError, UncertainPaperclipMutationError } from "./tools.js";
@@ -228,7 +228,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       if (!dispatched) { ctx.onDispatch?.(); dispatched = true; }
       await reportQueueStatus(`Splash step ${step + 1}/${maxSteps} is generating locally; a turn can take several minutes.`, "run_activity");
       const turnStarted = Date.now();
-      const decodeBaseline = await readSplashDecodeTokens(fetch, runSignal);
+      const progressBaseline = await readSplashProgress(fetch, runSignal);
       let budget: { promptTokens: number; maxOutputTokens: number } | null = null;
       let lastGenerated = 0;
       let reasoningTail = "";
@@ -242,9 +242,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         if (!turnActive || progressPending) return;
         progressPending = true;
         void (async () => {
-          const current = await readSplashDecodeTokens(fetch, runSignal);
+          const current = await readSplashProgress(fetch, runSignal);
           if (!turnActive) return;
-          if (current !== null && decodeBaseline !== null) lastGenerated = Math.max(lastGenerated, current - decodeBaseline);
+          if (current?.decodeTokens !== null && current?.decodeTokens !== undefined &&
+              progressBaseline?.decodeTokens !== null && progressBaseline?.decodeTokens !== undefined) {
+            lastGenerated = Math.max(lastGenerated, current.decodeTokens - progressBaseline.decodeTokens);
+          }
           const toolDraftAgeMs = toolDraft ? Date.now() - toolDraft.updatedAt : Number.POSITIVE_INFINITY;
           if (actionlessTurnExhausted(Date.now() - turnStarted, lastGenerated, reasoningChars, toolDraftAgeMs) &&
               !actionlessAbort.signal.aborted) {
@@ -252,8 +255,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
             return;
           }
           const elapsed = Math.max(1, Math.floor((Date.now() - turnStarted) / 60_000));
-          const count = decodeBaseline === null ? "token count unavailable" : `~${lastGenerated.toLocaleString("en-US")} generated tokens`;
-          const limit = budget ? ` / ${budget.maxOutputTokens.toLocaleString("en-US")} allowance` : "";
+          const prefillDelta = current?.prefillTokens !== null && current?.prefillTokens !== undefined &&
+            progressBaseline?.prefillTokens !== null && progressBaseline?.prefillTokens !== undefined
+            ? Math.max(0, current.prefillTokens - progressBaseline.prefillTokens) : null;
+          const preparing = current?.prefilling === true && lastGenerated === 0;
+          const count = preparing
+            ? prefillDelta === null ? "preparing context" : `preparing context · ~${prefillDelta.toLocaleString("en-US")} input tokens processed`
+            : current?.decodeTokens == null ? "token count unavailable" : `~${lastGenerated.toLocaleString("en-US")} generated tokens`;
+          const limit = !preparing && budget ? ` / ${budget.maxOutputTokens.toLocaleString("en-US")} allowance` : "";
           const excerpt = reasoningTail.replace(/\s+/g, " ").trim().slice(-90);
           const activity = toolDraft && toolDraftAgeMs < 60_000
             ? ` · assembling ${toolDraft.name} (${toolDraft.argumentChars.toLocaleString("en-US")} chars)`

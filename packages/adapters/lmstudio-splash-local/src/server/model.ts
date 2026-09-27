@@ -99,16 +99,27 @@ export async function probeLmStudioSplash(fetcher: typeof fetch = fetch, signal?
   return { modelId: LMSTUDIO_SPLASH_MODEL };
 }
 
-/** Splash reports a model-lifetime aggregate; callers display turn deltas as approximate. */
-export async function readSplashDecodeTokens(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<number | null> {
+/** Splash reports model-lifetime aggregates; callers display turn deltas as approximate. */
+export async function readSplashProgress(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<{
+  decodeTokens: number | null; prefillTokens: number | null; prefilling: boolean;
+} | null> {
   try {
     const response = await fetcher(STATUS_URL, { method: "GET", redirect: "error", signal: requestSignal(signal, 2_000) });
     if (!response.ok) return null;
     const status = await readBoundedJson(response);
     const metrics = isRecord(status) ? status.metrics : null;
-    const count = isRecord(metrics) ? metrics.decode_output_tokens : null;
-    return typeof count === "number" && Number.isSafeInteger(count) && count >= 0 ? count : null;
+    const scheduler = isRecord(status) ? status.scheduler : null;
+    const decodeCount = isRecord(metrics) ? metrics.decode_output_tokens : null;
+    const prefillCount = isRecord(metrics) ? metrics.prefill_input_tokens : null;
+    const validCount = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+      ? value : null;
+    return { decodeTokens: validCount(decodeCount), prefillTokens: validCount(prefillCount),
+      prefilling: isRecord(scheduler) && typeof scheduler.prefilling === "number" && scheduler.prefilling > 0 };
   } catch { return null; }
+}
+
+export async function readSplashDecodeTokens(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<number | null> {
+  return (await readSplashProgress(fetcher, signal))?.decodeTokens ?? null;
 }
 
 async function readSplashStream(response: Response, signal: AbortSignal,
