@@ -2,6 +2,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+vi.mock("undici", () => ({
+  Agent: class {},
+  fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args),
+}));
 import { execute } from "./execute.js";
 import { assertLmStudioSplashConfig } from "./profile.js";
 

@@ -1,3 +1,4 @@
+import { Agent, fetch as undiciFetch } from "undici";
 import { LMSTUDIO_SPLASH_MODEL, SPLASH_PACKAGE_ID, SPLASH_CONTEXT_TOKEN_LIMIT, SPLASH_OUTPUT_TOKEN_BUDGET } from "../index.js";
 export { LMSTUDIO_SPLASH_MODEL };
 const READY_URL = "http://127.0.0.1:3321/ready";
@@ -11,6 +12,9 @@ const MAX_TOKENIZE_RESPONSE_BYTES = 2_000_000;
 const MAX_REQUEST_BYTES = 524_288;
 const MAX_CONTENT_CHARS = 65_536;
 const MAX_TOOL_CALLS = 4;
+// Splash's non-streaming Chat response can take longer than Node fetch's
+// 300-second header deadline. Keep this dispatcher scoped to loopback Splash.
+const splashChatDispatcher = new Agent({ headersTimeout: 1_560_000, bodyTimeout: 1_560_000 });
 
 export interface LmStudioMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -140,16 +144,20 @@ export async function completeLmStudioTurn(input: {
     stream: false,
   });
   if (Buffer.byteLength(payload) > MAX_REQUEST_BYTES) throw new Error("Splash request exceeds the size limit.");
+  const signal = requestSignal(input.signal, 1_500_000);
   let response: Response;
   try {
-    response = await fetcher(COMPLETIONS_URL, {
-      method: "POST",
-      redirect: "error",
-      headers: { "Content-Type": "application/json" },
-      body: payload,
-      signal: requestSignal(input.signal, 600_000),
-    });
-  } catch {
+    const request = { method: "POST" as const, redirect: "error" as const,
+      headers: { "Content-Type": "application/json" }, body: payload, signal };
+    response = input.fetcher
+      ? await input.fetcher(COMPLETIONS_URL, request)
+      : await undiciFetch(COMPLETIONS_URL, { ...request, dispatcher: splashChatDispatcher }) as unknown as Response;
+  } catch (error) {
+    if (signal.aborted) throw new Error("App-owned Splash turn was cancelled or exceeded its 25-minute local limit; no alternate provider was tried.");
+    const cause = error instanceof Error ? (error as Error & { cause?: { code?: unknown } }).cause : null;
+    if (cause?.code === "UND_ERR_HEADERS_TIMEOUT") {
+      throw new Error("App-owned Splash response headers exceeded the local transport wait; no alternate provider was tried.");
+    }
     throw new Error("App-owned Splash inference is unavailable or timed out; no alternate provider was tried.");
   }
   if (!response.ok) throw new Error(`Splash inference failed with HTTP ${response.status}; no alternate provider was tried.`);

@@ -98,4 +98,14 @@ describe("LM Studio Splash model route", () => {
       "http://127.0.0.1:3321/apply-template", "http://127.0.0.1:3321/tokenize",
     ]);
   });
+
+  it("identifies a transport header deadline without trying another provider", async () => {
+    const fetcher = vi.fn<typeof fetch>(async (url) => {
+      if (String(url).endsWith("/apply-template")) return response({ prompt: "rendered prompt" });
+      if (String(url).endsWith("/tokenize")) return response({ tokens: [1, 2, 3] });
+      throw Object.assign(new Error("fetch failed"), { cause: { code: "UND_ERR_HEADERS_TIMEOUT" } });
+    });
+    await expect(completeLmStudioTurn({ messages: [], tools: [], fetcher })).rejects.toThrow("response headers exceeded");
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
 });

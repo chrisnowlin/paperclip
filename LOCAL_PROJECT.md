@@ -38,7 +38,7 @@ In V2, open a project's **Configuration** tab to choose an active owner agent an
 
 The Splash agent can be the local-trusted owner. It has Paperclip-owned file, command, and company-scoped task tools; commands run with the current macOS user's authority. It cannot be the sandbox reviewer. A Splash-owned task requires the reviewer to have an explicit AI Connection binding before attachment; choose the intended named account on that reviewer agent first. Attachment records the selected local route and reviewer connection IDs in the task activity log. A responsible-user default is resolved for each run and is not a fixed account at attachment time.
 
-Only one Splash agent run executes at a time in the V2 server. Three more may wait FIFO for up to ten minutes; a full queue fails visibly, and Stop removes a waiter. The slot covers the entire coding/tool run. Stop Splash refuses while work is active, and Start Splash refuses when another local LLM is loaded or port `3321` is occupied.
+Only one Splash agent run executes at a time in the V2 server. Three more may wait FIFO for up to 25 minutes; a full queue fails visibly, and Stop removes a waiter. The slot covers the entire coding/tool run, bounded to 25 minutes. Stop Splash refuses while work is active, and Start Splash refuses when another local LLM is loaded or port `3321` is occupied.
 
 The bundled Qwen model has a native 262,144-token context. V2 requests 85% of that limit (222,822 tokens) and caps output at the same value. Before each Chat turn, the adapter asks Splash to render and tokenize the prompt, then reduces the requested output to the remaining context. A length-limited answer is never treated as a completed tool call or final answer.
 

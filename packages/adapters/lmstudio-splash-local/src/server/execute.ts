@@ -6,8 +6,8 @@ import { splashRunQueue } from "./run-queue.js";
 import { createLmStudioToolExecutor, InterruptedCodingCommandError, UncertainPaperclipMutationError } from "./tools.js";
 
 const MAX_TOOL_CALLS = 48;
-const MAX_RUN_MS = 10 * 60 * 1_000;
-const MAX_QUEUE_WAIT_MS = 10 * 60 * 1_000;
+const MAX_RUN_MS = 25 * 60 * 1_000;
+const MAX_QUEUE_WAIT_MS = 25 * 60 * 1_000;
 
 function record(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -60,6 +60,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       if (runSignal.aborted) throw new Error("App-managed Splash run was cancelled or timed out.");
       await probeLmStudioSplash(fetch, runSignal);
       if (!dispatched) { ctx.onDispatch?.(); dispatched = true; }
+      await reportQueueStatus("Splash is generating locally; a turn can take several minutes.");
       const turn = await completeLmStudioTurn({ messages, tools: executor.definitions, signal: runSignal });
       inputTokens += turn.usage.inputTokens;
       outputTokens += turn.usage.outputTokens;
