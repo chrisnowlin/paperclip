@@ -808,6 +808,7 @@ export const createChildIssueSchema = withCreateIssueStatusDefault(
       watchdogDiscovery: true,
     })
     .extend({
+      idempotencyKey: z.string().trim().min(1).max(255).optional().nullable(),
       acceptanceCriteria: z
         .array(z.string().trim().min(1).max(500))
         .max(20)

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MAX_ISSUE_REQUEST_DEPTH } from "../index.js";
 import {
   addIssueCommentSchema,
+  createChildIssueSchema,
   createIssueSchema,
   issueBlockedInboxAttentionSchema,
   resolveIssueRecoveryActionSchema,
@@ -14,6 +15,15 @@ import {
 import { createAgentSchema } from "./agent.js";
 
 describe("issue validators", () => {
+  it("preserves an idempotency key for atomic parent-blocking child creation", () => {
+    const child = createChildIssueSchema.parse({
+      title: "One bounded child",
+      assigneeAgentId: "11111111-1111-4111-8111-111111111111",
+      idempotencyKey: "parent-child-v1",
+      blockParentUntilDone: true,
+    });
+    expect(child).toMatchObject({ idempotencyKey: "parent-child-v1", blockParentUntilDone: true });
+  });
   it("uses the same bounded unique upload ID contract for comment and update requests", () => {
     const id = "9af8228f-0be7-45ae-a104-6fbe0af6f1d3";
     expect(

@@ -175,6 +175,27 @@ describe("Paperclip-owned LM Studio coding tools", () => {
     expect(headers["X-Paperclip-Run-Id"]).toBe("run-1");
   });
 
+  it("requires an atomic parent blocker and idempotency key for child task creation", async () => {
+    const root = await workspace();
+    const parentId = "11111111-1111-4111-8111-111111111111";
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ id: "child-1" })));
+    const tools = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-cto",
+      authToken: "run-token", apiUrl: "http://127.0.0.1:3319", fetcher, ctoAgentId: "cto-1" });
+    const childPath = `/api/issues/${parentId}/children`;
+    await expect(tools.execute(call("paperclip_request", { method: "POST", path: childPath,
+      body: { title: "Child", blockParentUntilDone: true } }))).rejects.toThrow("idempotency");
+    await expect(tools.execute(call("paperclip_request", { method: "POST", path: childPath,
+      body: { title: "Child", idempotencyKey: "child-1" } }))).rejects.toThrow("blockParentUntilDone");
+    await expect(tools.execute(call("paperclip_request", { method: "POST", path: "/api/companies/company-1/issues",
+      body: { title: "Child", parentId, idempotencyKey: "child-1" } }))).rejects.toThrow("atomic parent blocker");
+    expect(fetcher).not.toHaveBeenCalled();
+    await tools.execute(call("paperclip_request", { method: "POST", path: childPath,
+      body: { title: "Child", idempotencyKey: "child-1", blockParentUntilDone: true } }));
+    expect(fetcher).toHaveBeenCalledWith(`http://127.0.0.1:3319${childPath}`, expect.objectContaining({
+      method: "POST", body: JSON.stringify({ title: "Child", idempotencyKey: "child-1", blockParentUntilDone: true }),
+    }));
+  });
+
   it("treats a server failure after a mutation as uncertain", async () => {
     const root = await workspace();
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("Internal error", { status: 500 }));
