@@ -9,6 +9,7 @@ import {
 import type { ExecutionProjection } from "@paperclipai/shared";
 import { EXECUTION_CONTROL_DEADLINE_MS } from "./execution-control-deadline.js";
 import { executionFailureRetryCount } from "./execution-recovery-attempt.js";
+import { getHeartbeatRunRuntimeStatus, type HeartbeatRunRuntimeStatus } from "./heartbeat-run-runtime-status.js";
 const text = (v: unknown) => (typeof v === "string" ? v : null);
 const executionRunColumns = {
   id: heartbeatRuns.id,
@@ -133,6 +134,7 @@ export async function executionProjectionsForRuns(
         pending.filter((row) => row.issueId === issueId),
         action,
         now,
+        run.status === "running" ? getHeartbeatRunRuntimeStatus(run.id, { companyId, now }) : null,
       ),
     );
   }
@@ -156,6 +158,7 @@ export function projectExecution(
   pending: Array<{ kind: string }>,
   recoveryAction: Recovery | undefined,
   now = new Date(),
+  runtimeProgress: HeartbeatRunRuntimeStatus | null = null,
 ): ExecutionProjection {
   const detail = coordinator?.failureDetail ?? {};
   const successorRunId = text(detail.successorRunId);
@@ -289,6 +292,14 @@ export function projectExecution(
   if (["failed", "cancelled", "timed_out", "interrupted"].includes(run.status))
     return set("failed", run.status === "cancelled" ? "Cancelled" : "Failed");
   if (run.status === "running") {
+    if (runtimeProgress?.phase === "local_model_wait") {
+      projection.lastConfirmedActivityAt = runtimeProgress.updatedAt.toISOString();
+      return set("queued", "Waiting for local model");
+    }
+    if (runtimeProgress?.phase === "run_activity") {
+      projection.lastConfirmedActivityAt = runtimeProgress.updatedAt.toISOString();
+      return set("working", "Working");
+    }
     // In-process local adapters do not expose a provider PID or native lease.
     // Fresh output is still authoritative evidence that their run is active.
     const recentOutputConfirmed = run.lastOutputAt != null &&

@@ -237,14 +237,15 @@ export interface HeartbeatRun {
 }
 
 /**
- * Typed phase labels emitted by the sandbox-managed runtime as it progresses
- * through workspace preparation, adapter startup, restore/export, and
+ * Typed phase labels emitted by execution runtimes as they progress through
+ * workspace preparation, local model wait, adapter work, restore/export, and
  * finalization. Used by the ephemeral runtime status plumbing; not persisted.
  */
 export type HeartbeatRunStatusPhase =
   | "git_sync"
   | "config_sync"
   | "adapter_startup"
+  | "local_model_wait"
   | "restore"
   | "export"
   | "finalize"

@@ -25,6 +25,8 @@ export type RuntimeStatusPhase =
   | "git_sync"
   | "config_sync"
   | "adapter_startup"
+  | "local_model_wait"
+  | "run_activity"
   | "restore"
   | "export"
   | "finalize";

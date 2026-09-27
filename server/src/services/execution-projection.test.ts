@@ -134,6 +134,19 @@ describe("execution truth projection", () => {
       ).phase,
     ).toBe("working");
   });
+  it("projects a local model queue wait separately from active generation", () => {
+    const progress = {
+      companyId: "company-1", issueId: "issue-1", agentId: "agent-1", runId: "run-1",
+      phase: "local_model_wait" as const, message: "Waiting for the local Splash model",
+      updatedAt: now, currentToolName: null, lastAssistantSnippet: null, lastEventAt: now,
+    };
+    expect(projectExecution(run({ id: "run-1", lastOutputAt: null }), undefined, [], undefined, now, progress))
+      .toMatchObject({ phase: "queued", label: "Waiting for local model",
+        lastConfirmedActivityAt: now.toISOString() });
+    expect(projectExecution(run({ id: "run-1", lastOutputAt: null }), undefined, [], undefined, now,
+      { ...progress, phase: "run_activity" }))
+      .toMatchObject({ phase: "working", label: "Working" });
+  });
   it("distinguishes provider work, finalization and timed retry", () => {
     expect(
       project(

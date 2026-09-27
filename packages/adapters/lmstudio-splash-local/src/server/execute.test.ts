@@ -410,13 +410,14 @@ describe("direct LM Studio Splash heartbeat", () => {
       return streamTurn(finalTurn);
     }));
     const progress: string[] = [];
+    const progressPhases: string[] = [];
     const dispatches: string[] = [];
     const cancellationReady: string[] = [];
     const run = (runId: string) => execute({
       runId, agent: { id: runId, companyId: "company-1", name: "Local", adapterType: "lmstudio_splash_local", adapterConfig: {} },
       runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
       config: { cwd: root }, context: context(root), authToken: "run-token",
-      onLog: async () => {}, onRuntimeProgress: async (update) => { progress.push(update.message); },
+      onLog: async () => {}, onRuntimeProgress: async (update) => { progress.push(update.message); progressPhases.push(update.phase); },
       onCancellationReady: async () => { cancellationReady.push(runId); },
       onDispatch: () => { dispatches.push(runId); },
     });
@@ -433,12 +434,14 @@ describe("direct LM Studio Splash heartbeat", () => {
       expect(cancellationReady).toEqual(["run-first", "run-second"]);
       expect(progress).toContain("Queued for the local Splash model (joined at position 1).");
       expect(progress).toContain("Waiting for the local Splash model; another local run has the slot.");
+      expect(progressPhases).toContain("local_model_wait");
     } finally { releaseFirst(); vi.useRealTimers(); }
     await Promise.all([first, second]);
     expect(modelProbes).toBe(2);
     expect(completions).toBe(2);
     expect(dispatches).toEqual(["run-first", "run-second"]);
     expect(progress.filter((message) => message === "Local Splash model slot acquired.")).toHaveLength(2);
+    expect(progressPhases).toContain("run_activity");
   });
 
   it("accepts controller-owned scratch and Git environment but rejects paid provider keys", () => {

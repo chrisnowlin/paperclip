@@ -1,4 +1,4 @@
-import type { AdapterExecutionContext, AdapterExecutionResult } from "@paperclipai/adapter-utils";
+import type { AdapterExecutionContext, AdapterExecutionResult, RuntimeStatusPhase } from "@paperclipai/adapter-utils";
 import { buildPaperclipEnv, joinPromptSections, renderPaperclipWakePrompt, selectPaperclipTaskMarkdown } from "@paperclipai/adapter-utils/server-utils";
 import { completeLmStudioTurn, LMSTUDIO_SPLASH_MODEL, probeLmStudioSplash, readSplashDecodeTokens, type LmStudioMessage } from "./model.js";
 import { assertLmStudioSplashConfig } from "./profile.js";
@@ -140,18 +140,18 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const queueSignal = ctx.signal
     ? AbortSignal.any([ctx.signal, AbortSignal.timeout(MAX_QUEUE_WAIT_MS)])
     : AbortSignal.timeout(MAX_QUEUE_WAIT_MS);
-  const reportQueueStatus = async (message: string) => {
-    try { await ctx.onRuntimeProgress?.({ phase: "adapter_startup", message }); }
+  const reportQueueStatus = async (message: string, phase: RuntimeStatusPhase = "adapter_startup") => {
+    try { await ctx.onRuntimeProgress?.({ phase, message }); }
     catch { /* progress reporting must not prevent local work */ }
   };
   let queuedProgress: Promise<void> | null = null;
   let queueStatusTimer: ReturnType<typeof setInterval> | null = null;
   const release = await splashRunQueue.acquire(queueSignal, (position) => {
-    queuedProgress = reportQueueStatus(`Queued for the local Splash model (joined at position ${position}).`);
+    queuedProgress = reportQueueStatus(`Queued for the local Splash model (joined at position ${position}).`, "local_model_wait");
     // Runtime status expires after 90 seconds. Refresh the wait state so a
     // healthy serial queue does not look like a disconnected provider run.
     queueStatusTimer = setInterval(() => {
-      void reportQueueStatus("Waiting for the local Splash model; another local run has the slot.");
+      void reportQueueStatus("Waiting for the local Splash model; another local run has the slot.", "local_model_wait");
     }, 30_000);
   }).finally(() => {
     if (queueStatusTimer) clearInterval(queueStatusTimer);
@@ -215,7 +215,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       if (staleBeforeTurn) return skippedTaskResult(ctx, staleBeforeTurn, { inputTokens, outputTokens });
       await probeLmStudioSplash(fetch, runSignal);
       if (!dispatched) { ctx.onDispatch?.(); dispatched = true; }
-      await reportQueueStatus("Splash is generating locally; a turn can take several minutes.");
+      await reportQueueStatus("Splash is generating locally; a turn can take several minutes.", "run_activity");
       const turnStarted = Date.now();
       const decodeBaseline = await readSplashDecodeTokens(fetch, runSignal);
       let budget: { promptTokens: number; maxOutputTokens: number } | null = null;
@@ -247,7 +247,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           const activity = toolDraft && toolDraftAgeMs < 60_000
             ? ` · assembling ${toolDraft.name} (${toolDraft.argumentChars.toLocaleString("en-US")} chars)`
             : excerpt ? ` · thinking: ${excerpt}` : "";
-          await reportQueueStatus(`Splash ${count}${limit} · ${elapsed}m${activity}`);
+          await reportQueueStatus(`Splash ${count}${limit} · ${elapsed}m${activity}`, "run_activity");
         })().finally(() => { progressPending = false; });
       }, 15_000);
       progressTimer.unref();
@@ -261,7 +261,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         },
         onTokenBudget: async (measured) => {
           budget = measured;
-          await reportQueueStatus(`Splash prompt: ${measured.promptTokens.toLocaleString("en-US")} tokens; output allowance: ${measured.maxOutputTokens.toLocaleString("en-US")} tokens.`);
+          await reportQueueStatus(`Splash prompt: ${measured.promptTokens.toLocaleString("en-US")} tokens; output allowance: ${measured.maxOutputTokens.toLocaleString("en-US")} tokens.`, "run_activity");
         } }); }
       catch (error) {
         if (actionlessAbort.signal.aborted && !runSignal.aborted) {
