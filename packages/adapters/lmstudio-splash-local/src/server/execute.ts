@@ -12,6 +12,8 @@ const MAX_QUEUE_WAIT_MS = 2 * 60 * 60 * 1_000;
 const WATCHDOG_SETUP_TIMEOUT_MS = 5_000;
 const ACTIONLESS_TURN_REVIEW_MS = 8 * 60_000;
 const ACTIONLESS_TURN_REVIEW_TOKENS = 20_000;
+const ACTIONLESS_REFOCUS_MS = 4 * 60_000;
+const ACTIONLESS_REFOCUS_TOKENS = 10_000;
 const ISSUE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const INVOKABLE_LOCAL_MANAGER_STATUSES = new Set(["active", "idle", "running", "error"]);
 type TaskSkipReason = "done" | "cancelled" | "blocked" | "reassigned";
@@ -21,6 +23,13 @@ export function actionlessTurnExhausted(elapsedMs: number, generatedTokens: numb
   if (toolDraftAgeMs < 60_000) return false;
   return elapsedMs >= ACTIONLESS_TURN_REVIEW_MS &&
     Math.max(generatedTokens, Math.floor(reasoningChars / 4)) >= ACTIONLESS_TURN_REVIEW_TOKENS;
+}
+
+export function actionlessTurnNeedsRefocus(elapsedMs: number, generatedTokens: number, reasoningChars: number,
+  toolDraftAgeMs = Number.POSITIVE_INFINITY): boolean {
+  if (toolDraftAgeMs < 60_000) return false;
+  return elapsedMs >= ACTIONLESS_REFOCUS_MS &&
+    Math.max(generatedTokens, Math.floor(reasoningChars / 4)) >= ACTIONLESS_REFOCUS_TOKENS;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -213,6 +222,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     let outputTokens = 0;
     let toolCallCount = 0;
     let dispatched = false;
+    let refocusAttempts = 0;
     for (let step = 0; step < maxSteps; step += 1) {
       if (runSignal.aborted) throw new Error("App-managed Splash run was cancelled or timed out.");
       if (step === maxSteps - 3) {
@@ -235,6 +245,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       let reasoningChars = 0;
       let toolDraft: { name: string; argumentChars: number; updatedAt: number } | null = null;
       const actionlessAbort = new AbortController();
+      let actionlessAbortReason: "refocus" | "scope_stall" | null = null;
       const turnSignal = AbortSignal.any([runSignal, actionlessAbort.signal]);
       let turnActive = true;
       let progressPending = false;
@@ -249,8 +260,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
             lastGenerated = Math.max(lastGenerated, current.decodeTokens - progressBaseline.decodeTokens);
           }
           const toolDraftAgeMs = toolDraft ? Date.now() - toolDraft.updatedAt : Number.POSITIVE_INFINITY;
+          const coordinatorRefocus = (ctx.agent.role === "cto" || ctx.agent.role === "ceo") &&
+            actionlessTurnNeedsRefocus(Date.now() - turnStarted, lastGenerated, reasoningChars, toolDraftAgeMs);
+          if (coordinatorRefocus && !actionlessAbort.signal.aborted) {
+            actionlessAbortReason = refocusAttempts === 0 ? "refocus" : "scope_stall";
+            actionlessAbort.abort();
+            return;
+          }
           if (actionlessTurnExhausted(Date.now() - turnStarted, lastGenerated, reasoningChars, toolDraftAgeMs) &&
               !actionlessAbort.signal.aborted) {
+            actionlessAbortReason = "scope_stall";
             actionlessAbort.abort();
             return;
           }
@@ -286,6 +305,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       catch (error) {
         if (actionlessAbort.signal.aborted && !runSignal.aborted) {
           const generatedEstimate = Math.max(lastGenerated, Math.floor(reasoningChars / 4));
+          if (actionlessAbortReason === "refocus") {
+            refocusAttempts += 1;
+            await ctx.onLog("stdout", `${JSON.stringify({ type: "scope_refocus", generatedTokensEstimate: generatedEstimate,
+              elapsedMinutes: Math.floor((Date.now() - turnStarted) / 60_000), step: step + 1 })}\n`);
+            messages.push({ role: "system", content: "Your previous turn used substantial local reasoning without a task action. Do not restate or extend that plan. On this turn, call one appropriate Paperclip task tool now to record a concrete decision or create the single bounded child you already identified. If you cannot act safely, record the exact blocker on the current issue. This is the only automatic refocus attempt; another actionless turn will stop the run." });
+            continue;
+          }
           await ctx.onLog("stdout", `${JSON.stringify({ type: "scope_stall", generatedTokens: generatedEstimate,
             elapsedMinutes: Math.floor((Date.now() - turnStarted) / 60_000), step: step + 1 })}\n`);
           throw new Error("Splash made no task-tool progress after a substantial local reasoning budget. Review this task's scope, preserve existing work, and split the next deliverable before retrying; no alternate provider was tried.");

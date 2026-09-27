@@ -6,7 +6,7 @@ vi.mock("undici", () => ({
   Agent: class {},
   fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args),
 }));
-import { actionlessTurnExhausted, execute } from "./execute.js";
+import { actionlessTurnExhausted, actionlessTurnNeedsRefocus, execute } from "./execute.js";
 import { assertLmStudioSplashConfig } from "./profile.js";
 
 const roots: string[] = [];
@@ -246,6 +246,51 @@ describe("direct LM Studio Splash heartbeat", () => {
     expect(actionlessTurnExhausted(8 * 60_000, 0, 80_000)).toBe(true);
     expect(actionlessTurnExhausted(9 * 60_000, 25_000, 0, 30_000)).toBe(false);
     expect(actionlessTurnExhausted(9 * 60_000, 25_000, 0, 60_000)).toBe(true);
+  });
+
+  it("refocuses a long actionless local turn once before failing the run", async () => {
+    const root = await workspace();
+    vi.useFakeTimers();
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+    let statusReads = 0;
+    let completions = 0;
+    const prompts: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/status")) {
+        statusReads += 1;
+        const ready = splashReadiness(url)!;
+        return new Response(JSON.stringify({ ...await ready.json() as object,
+          metrics: { decode_output_tokens: statusReads <= 2 ? 0 : 10_500 } }));
+      }
+      const readiness = splashReadiness(url);
+      if (readiness) return readiness;
+      completions += 1;
+      prompts.push(String(init?.body));
+      if (completions > 1) return streamTurn(finalTurn);
+      resolveStarted();
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"reasoning_content":"thinking"},"finish_reason":null}]}\n\n'));
+        },
+      }), { headers: { "Content-Type": "text/event-stream" } });
+    }));
+    const logs: string[] = [];
+    const run = execute({
+      runId: "run-refocus", agent: { id: "agent-1", companyId: "company-1", name: "Local", role: "cto",
+        adapterType: "lmstudio_splash_local", adapterConfig: {} },
+      runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+      config: { cwd: root }, context: context(root), authToken: "private-run-token",
+      onLog: async (_stream, value) => { logs.push(value); },
+    });
+    await started;
+    await vi.advanceTimersByTimeAsync(4 * 60_000 + 15_000);
+    await expect(run).resolves.toMatchObject({ exitCode: 0 });
+    expect(actionlessTurnNeedsRefocus(4 * 60_000, 10_000, 0)).toBe(true);
+    expect(completions).toBe(2);
+    expect(prompts[1]).toContain("Your previous turn used substantial local reasoning without a task action");
+    expect(logs.join("")).toContain("scope_refocus");
+    expect(logs.join("")).not.toContain("private-run-token");
   });
 
   it("stops a costly actionless model turn before the hard deadline without invoking another provider", async () => {
