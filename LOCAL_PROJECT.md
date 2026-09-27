@@ -6,7 +6,7 @@ This is a local checkout of [paperclipai/paperclip](https://github.com/paperclip
 
 - The upstream Paperclip source is at the repository root (`server/`, `ui/`, `packages/`, `cli/`).
 - `macos/PaperclipStandaloneDev/` contains the SwiftPM macOS wrapper developed for the installed standalone app. It includes the menu bar controls, local agent setup, and the in-app OpenCode option in the new-organization wizard.
-- The local agent setup also offers **Splash (app-managed)**. V2 bundles Splash 1.0.2 program files and starts its own `incoai/Qwen3.8-27B-Splash` server at `127.0.0.1:3321` when an instance admin presses **Start Splash** in agent settings. The existing Hugging Face model snapshot remains outside the app. The Paperclip-owned coding loop does not use OpenCode, LM Studio, or a Claude/OpenAI login.
+- The local agent setup also offers **Splash (app-managed)**. V2 bundles Splash 1.0.2 program files and starts its own `incoai/Qwen3.8-27B-Splash` server at `127.0.0.1:3321` on a local task wake or when an instance admin presses **Start Splash** in agent settings. The existing Hugging Face model snapshot remains outside the app. The Paperclip-owned coding loop does not use OpenCode, LM Studio, or a Claude/OpenAI login.
 - `script/build_and_run.sh` builds `dist/Paperclip Standalone V2.app` and launches it. Each build uses `script/build_local_runtime.sh` to build and package the Paperclip CLI, server, UI, and required workspace packages from this checkout into the Git-ignored wrapper `runtime/` directory, then bundles Node.js 24.
 
 **V2** uses `http://127.0.0.1:3319`, embedded PostgreSQL port `54333`, and `~/Library/Application Support/Paperclip Standalone V2`. The V1 dev app uses port `3318`; the installed **Paperclip Standalone** app uses port `3317`. Their processes, bundles, and databases are separate.
@@ -17,8 +17,11 @@ Prerequisites: macOS 14+, Xcode command-line tools, and Node.js 24.11+ with npm 
 
 ```sh
 ./script/build_and_run.sh --build-only  # package without launching
+./script/build_and_run.sh --stage-only  # sign a separate .staged.app while V2 runs; do not launch or replace it
 ./script/build_and_run.sh               # build and launch the dev app when V2 is stopped
 ```
+
+The stage-only bundle is `dist/Paperclip Standalone V2.staged.app`. It has the same identity and ports as V2, so never launch it alongside the live app. After active runs finish, stop V2 cleanly and install the staged bundle before relaunching.
 
 The wrapper alone can be compiled without downloading the Paperclip runtime:
 

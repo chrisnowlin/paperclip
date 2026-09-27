@@ -6,9 +6,21 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 app_project="$repo_root/macos/PaperclipStandaloneDev"
 runtime_dir="$app_project/runtime"
 app_bundle="$repo_root/dist/Paperclip Standalone V2.app"
+mode="${1:-}"
+if [[ "$mode" != "" && "$mode" != "--build-only" && "$mode" != "--stage-only" ]]; then
+  echo "Usage: $0 [--build-only|--stage-only]" >&2
+  exit 2
+fi
+if [[ "$mode" == "--stage-only" ]]; then
+  app_bundle="$repo_root/dist/Paperclip Standalone V2.staged.app"
+fi
 
-if pgrep -x PaperclipStandaloneV2 >/dev/null 2>&1; then
+if [[ "$mode" != "--stage-only" ]] && pgrep -x PaperclipStandaloneV2 >/dev/null 2>&1; then
   echo "A V2 app is running. Stop it cleanly before replacing its bundle." >&2
+  exit 1
+fi
+if [[ "$mode" == "--stage-only" ]] && ps -axo args | grep -F "$app_bundle/Contents/MacOS/PaperclipStandaloneV2" | grep -v grep >/dev/null; then
+  echo "The staged V2 app is running. Stop it cleanly before replacing its bundle." >&2
   exit 1
 fi
 
@@ -43,7 +55,7 @@ splash_libexec="$(cd "$splash_prefix/libexec" && pwd -P)"
 "$repo_root/script/build_local_runtime.sh" "$node_src"
 
 swift build -c release --package-path "$app_project"
-rm -rf "$app_bundle"
+if [[ -e "$app_bundle" ]]; then rm -r "$app_bundle"; fi
 mkdir -p "$app_bundle/Contents/MacOS" "$app_bundle/Contents/Resources/bin" \
   "$app_bundle/Contents/Resources/runtime"
 cp "$app_project/.build/release/PaperclipStandaloneV2" "$app_bundle/Contents/MacOS/PaperclipStandaloneV2"
@@ -86,6 +98,6 @@ PLIST
 
 codesign --force --deep --sign - "$app_bundle" >/dev/null
 echo "Built $app_bundle"
-if [[ "${1:-}" != "--build-only" ]]; then
+if [[ "$mode" == "" ]]; then
   open "$app_bundle"
 fi
