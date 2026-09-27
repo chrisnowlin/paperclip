@@ -700,10 +700,14 @@ has a watchdog before inference begins. If none exists, it assigns the same
 local agent as a default reviewer of stopped work. An explicit named watchdog
 already assigned by the company is preserved. Watchdog-origin issues never
 register another watchdog, so review cannot recurse. Setup failure is shown in
-the run's live status and does not prevent productive work. This registration
-does not shorten the 25-minute model turn or claim that a still-running turn is
-stalled; it supplies an agent-owned review path when a source subtree later
-stops without a valid live or waiting path.
+the run's live status and does not prevent productive work. The local adapter
+also ends an individual inference turn that has spent at least eight minutes
+and about 20,000 generated tokens without returning a task tool action. It
+records only the count, elapsed time, and step as a `scope_stall` run event;
+private reasoning text remains out of the run log. The 25-minute deadline
+remains the hard limit for other turns. The active-run output-silence signal
+remains informational; the bounded adapter stop supplies an agent-owned review
+path when a source subtree then lacks a valid live or waiting path.
 
 The scan scope is:
 

@@ -9,7 +9,14 @@ const MAX_TOOL_CALLS = 48;
 const MAX_RUN_MS = 2 * 60 * 60 * 1_000;
 const MAX_QUEUE_WAIT_MS = 2 * 60 * 60 * 1_000;
 const WATCHDOG_SETUP_TIMEOUT_MS = 5_000;
+const ACTIONLESS_TURN_REVIEW_MS = 8 * 60_000;
+const ACTIONLESS_TURN_REVIEW_TOKENS = 20_000;
 const ISSUE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function actionlessTurnExhausted(elapsedMs: number, generatedTokens: number, reasoningChars: number): boolean {
+  return elapsedMs >= ACTIONLESS_TURN_REVIEW_MS &&
+    Math.max(generatedTokens, Math.floor(reasoningChars / 4)) >= ACTIONLESS_TURN_REVIEW_TOKENS;
+}
 
 function record(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -25,8 +32,8 @@ async function ensureLocalTaskWatchdog(input: {
   if (!input.issueId || !ISSUE_ID_PATTERN.test(input.issueId)) return true;
   const signal = AbortSignal.any([input.signal, AbortSignal.timeout(WATCHDOG_SETUP_TIMEOUT_MS)]);
   const base = input.apiUrl.endsWith("/") ? input.apiUrl : `${input.apiUrl}/`;
-  const issueUrl = new URL(`issues/${input.issueId}`, base);
-  const watchdogUrl = new URL(`issues/${input.issueId}/watchdog`, base);
+  const issueUrl = new URL(`api/issues/${input.issueId}`, base);
+  const watchdogUrl = new URL(`api/issues/${input.issueId}/watchdog`, base);
   const headers = { Authorization: `Bearer ${input.authToken}` };
   try {
     const sourceResponse = await fetch(issueUrl.toString(), { headers, signal });
@@ -114,6 +121,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       let budget: { promptTokens: number; maxOutputTokens: number } | null = null;
       let lastGenerated = 0;
       let reasoningTail = "";
+      let reasoningChars = 0;
+      const actionlessAbort = new AbortController();
+      const turnSignal = AbortSignal.any([runSignal, actionlessAbort.signal]);
       let turnActive = true;
       let progressPending = false;
       const progressTimer = setInterval(() => {
@@ -123,6 +133,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           const current = await readSplashDecodeTokens(fetch, runSignal);
           if (!turnActive) return;
           if (current !== null && decodeBaseline !== null) lastGenerated = Math.max(lastGenerated, current - decodeBaseline);
+          if (actionlessTurnExhausted(Date.now() - turnStarted, lastGenerated, reasoningChars) &&
+              !actionlessAbort.signal.aborted) {
+            actionlessAbort.abort();
+            return;
+          }
           const elapsed = Math.max(1, Math.floor((Date.now() - turnStarted) / 60_000));
           const count = decodeBaseline === null ? "token count unavailable" : `~${lastGenerated.toLocaleString("en-US")} generated tokens`;
           const limit = budget ? ` / ${budget.maxOutputTokens.toLocaleString("en-US")} allowance` : "";
@@ -132,12 +147,21 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       }, 15_000);
       progressTimer.unref();
       let turn: Awaited<ReturnType<typeof completeLmStudioTurn>>;
-      try { turn = await completeLmStudioTurn({ messages, tools: executor.definitions, signal: runSignal, stream: true,
-        onReasoningDelta: (delta) => { reasoningTail = (reasoningTail + delta).slice(-160); },
+      try { turn = await completeLmStudioTurn({ messages, tools: executor.definitions, signal: turnSignal, stream: true,
+        onReasoningDelta: (delta) => { reasoningTail = (reasoningTail + delta).slice(-160); reasoningChars += delta.length; },
         onTokenBudget: async (measured) => {
           budget = measured;
           await reportQueueStatus(`Splash prompt: ${measured.promptTokens.toLocaleString("en-US")} tokens; output allowance: ${measured.maxOutputTokens.toLocaleString("en-US")} tokens.`);
         } }); }
+      catch (error) {
+        if (actionlessAbort.signal.aborted && !runSignal.aborted) {
+          const generatedEstimate = Math.max(lastGenerated, Math.floor(reasoningChars / 4));
+          await ctx.onLog("stdout", `${JSON.stringify({ type: "scope_stall", generatedTokens: generatedEstimate,
+            elapsedMinutes: Math.floor((Date.now() - turnStarted) / 60_000), step: step + 1 })}\n`);
+          throw new Error("Splash made no task-tool progress after a substantial local reasoning budget. Review this task's scope, preserve existing work, and split the next deliverable before retrying; no alternate provider was tried.");
+        }
+        throw error;
+      }
       finally { turnActive = false; clearInterval(progressTimer); }
       inputTokens += turn.usage.inputTokens;
       outputTokens += turn.usage.outputTokens;

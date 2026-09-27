@@ -6,11 +6,12 @@ vi.mock("undici", () => ({
   Agent: class {},
   fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args),
 }));
-import { execute } from "./execute.js";
+import { actionlessTurnExhausted, execute } from "./execute.js";
 import { assertLmStudioSplashConfig } from "./profile.js";
 
 const roots: string[] = [];
 afterEach(async () => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -64,6 +65,51 @@ function context(root: string) {
 }
 
 describe("direct LM Studio Splash heartbeat", () => {
+  it("allows slow local generation until both the time and output thresholds are reached", () => {
+    expect(actionlessTurnExhausted(9 * 60_000, 2_000, 0)).toBe(false);
+    expect(actionlessTurnExhausted(7 * 60_000, 25_000, 0)).toBe(false);
+    expect(actionlessTurnExhausted(8 * 60_000, 0, 80_000)).toBe(true);
+  });
+
+  it("stops a costly actionless model turn before the hard deadline without invoking another provider", async () => {
+    const root = await workspace();
+    vi.useFakeTimers();
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+    let statusReads = 0;
+    let completions = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/status")) {
+        statusReads += 1;
+        const ready = splashReadiness(url)!;
+        return new Response(JSON.stringify({ ...await ready.json() as object,
+          metrics: { decode_output_tokens: statusReads <= 2 ? 0 : 20_500 } }));
+      }
+      const readiness = splashReadiness(url);
+      if (readiness) return readiness;
+      completions += 1;
+      resolveStarted();
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
+    }));
+    const logs: string[] = [];
+    const run = execute({
+      runId: "run-actionless", agent: { id: "agent-1", companyId: "company-1", name: "Local",
+        adapterType: "lmstudio_splash_local", adapterConfig: {} },
+      runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+      config: { cwd: root }, context: context(root), authToken: "private-run-token",
+      onLog: async (_stream, value) => { logs.push(value); },
+    });
+    const failure = expect(run).rejects.toThrow("no task-tool progress");
+    await started;
+    await vi.advanceTimersByTimeAsync(8 * 60_000 + 15_000);
+    await failure;
+    expect(completions).toBe(1);
+    expect(logs.join("")).toContain("scope_stall");
+    expect(logs.join("")).not.toContain("private-run-token");
+  });
+
   it("installs a local self-watchdog for a task and preserves a named existing watcher", async () => {
     const root = await workspace();
     const issueId = "8eab2670-f2b8-4d0c-8f95-d595a1c30f78";
@@ -74,8 +120,8 @@ describe("direct LM Studio Splash heartbeat", () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
       const method = init?.method ?? "GET";
       requests.push({ url, method, body: init?.body ? String(init.body) : null });
-      if (url.endsWith(`/issues/${issueId}`)) return new Response(JSON.stringify({ id: issueId, originKind: sourceOriginKind }));
-      if (url.endsWith(`/issues/${issueId}/watchdog`)) {
+      if (url.endsWith(`/api/issues/${issueId}`)) return new Response(JSON.stringify({ id: issueId, originKind: sourceOriginKind }));
+      if (url.endsWith(`/api/issues/${issueId}/watchdog`)) {
         return new Response(JSON.stringify(method === "PUT" ? { id: "watchdog-new" } : existingWatchdog));
       }
       const readiness = splashReadiness(url);
@@ -93,7 +139,7 @@ describe("direct LM Studio Splash heartbeat", () => {
     const writes = requests.filter((request) => request.method === "PUT");
     expect(writes).toHaveLength(1);
     expect(JSON.parse(writes[0]!.body!)).toMatchObject({ agentId });
-    expect(writes[0]!.url).toContain(`/issues/${issueId}/watchdog`);
+    expect(writes[0]!.url).toContain(`/api/issues/${issueId}/watchdog`);
     expect(JSON.stringify(requests)).not.toContain("private-run-token");
     existingWatchdog = { id: "named-watchdog", watchdogAgentId: "another-local-agent" };
     requests.length = 0;
@@ -103,7 +149,7 @@ describe("direct LM Studio Splash heartbeat", () => {
     existingWatchdog = null;
     requests.length = 0;
     await run();
-    expect(requests.filter((request) => request.url.endsWith(`/issues/${issueId}/watchdog`))).toHaveLength(0);
+    expect(requests.filter((request) => request.url.endsWith(`/api/issues/${issueId}/watchdog`))).toHaveLength(0);
   });
 
   it("routes broad CTO work toward named, bounded child assignments", async () => {
