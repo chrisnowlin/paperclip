@@ -143,6 +143,7 @@ describe("LM Studio Splash model route", () => {
   });
 
   it("assembles streamed tool deltas and withholds them until the final marker", async () => {
+    const onToolDraftProgress = vi.fn();
     const fetcher = sizedFetcher(streamResponse([
       { choices: [{ delta: { tool_calls: [{ index: 0, id: "call-1", type: "function", function: { name: "write_file" } }] }, finish_reason: null }] },
       { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{"path":' } }] }, finish_reason: null }] },
@@ -151,11 +152,15 @@ describe("LM Studio Splash model route", () => {
       { choices: [], usage: { prompt_tokens: 8, completion_tokens: 9 } },
       "[DONE]",
     ]));
-    await expect(completeLmStudioTurn({ messages: [], tools: [], fetcher, stream: true })).resolves.toEqual({
+    await expect(completeLmStudioTurn({ messages: [], tools: [], fetcher, stream: true, onToolDraftProgress })).resolves.toEqual({
       content: null,
       toolCalls: [{ id: "call-1", name: "write_file", arguments: { path: "RESULT.txt", content: "ok" } }],
       usage: { inputTokens: 8, outputTokens: 9 },
     });
+    expect(onToolDraftProgress).toHaveBeenLastCalledWith({
+      name: "write_file", argumentChars: JSON.stringify({ path: "RESULT.txt", content: "ok" }).length,
+    });
+    expect(JSON.stringify(onToolDraftProgress.mock.calls)).not.toContain("RESULT.txt");
   });
 
   it("accepts five parallel streamed tool calls within the run budget", async () => {

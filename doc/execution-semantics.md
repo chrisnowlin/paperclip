@@ -705,7 +705,10 @@ also ends an individual inference turn that has spent at least eight minutes
 and about 20,000 generated tokens without returning a task tool action. It
 records only the count, elapsed time, and step as a `scope_stall` run event;
 private reasoning text remains out of the run log. The 25-minute deadline
-remains the hard limit for other turns. The active-run output-silence signal
+remains the hard limit for other turns. A live stream of tool-call arguments
+does not count as actionless: the live view shows only the known tool name and
+argument character count while the complete call is assembled and validated.
+Partial arguments are never executed or written to the run log. The active-run output-silence signal
 remains informational; the bounded adapter stop supplies an agent-owned review
 path when a source subtree then lacks a valid live or waiting path.
 

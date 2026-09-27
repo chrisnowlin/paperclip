@@ -13,7 +13,9 @@ const ACTIONLESS_TURN_REVIEW_MS = 8 * 60_000;
 const ACTIONLESS_TURN_REVIEW_TOKENS = 20_000;
 const ISSUE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-export function actionlessTurnExhausted(elapsedMs: number, generatedTokens: number, reasoningChars: number): boolean {
+export function actionlessTurnExhausted(elapsedMs: number, generatedTokens: number, reasoningChars: number,
+  toolDraftAgeMs = Number.POSITIVE_INFINITY): boolean {
+  if (toolDraftAgeMs < 60_000) return false;
   return elapsedMs >= ACTIONLESS_TURN_REVIEW_MS &&
     Math.max(generatedTokens, Math.floor(reasoningChars / 4)) >= ACTIONLESS_TURN_REVIEW_TOKENS;
 }
@@ -122,6 +124,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       let lastGenerated = 0;
       let reasoningTail = "";
       let reasoningChars = 0;
+      let toolDraft: { name: string; argumentChars: number; updatedAt: number } | null = null;
       const actionlessAbort = new AbortController();
       const turnSignal = AbortSignal.any([runSignal, actionlessAbort.signal]);
       let turnActive = true;
@@ -133,7 +136,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           const current = await readSplashDecodeTokens(fetch, runSignal);
           if (!turnActive) return;
           if (current !== null && decodeBaseline !== null) lastGenerated = Math.max(lastGenerated, current - decodeBaseline);
-          if (actionlessTurnExhausted(Date.now() - turnStarted, lastGenerated, reasoningChars) &&
+          const toolDraftAgeMs = toolDraft ? Date.now() - toolDraft.updatedAt : Number.POSITIVE_INFINITY;
+          if (actionlessTurnExhausted(Date.now() - turnStarted, lastGenerated, reasoningChars, toolDraftAgeMs) &&
               !actionlessAbort.signal.aborted) {
             actionlessAbort.abort();
             return;
@@ -142,13 +146,21 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           const count = decodeBaseline === null ? "token count unavailable" : `~${lastGenerated.toLocaleString("en-US")} generated tokens`;
           const limit = budget ? ` / ${budget.maxOutputTokens.toLocaleString("en-US")} allowance` : "";
           const excerpt = reasoningTail.replace(/\s+/g, " ").trim().slice(-90);
-          await reportQueueStatus(`Splash ${count}${limit} · ${elapsed}m${excerpt ? ` · thinking: ${excerpt}` : ""}`);
+          const activity = toolDraft && toolDraftAgeMs < 60_000
+            ? ` · assembling ${toolDraft.name} (${toolDraft.argumentChars.toLocaleString("en-US")} chars)`
+            : excerpt ? ` · thinking: ${excerpt}` : "";
+          await reportQueueStatus(`Splash ${count}${limit} · ${elapsed}m${activity}`);
         })().finally(() => { progressPending = false; });
       }, 15_000);
       progressTimer.unref();
       let turn: Awaited<ReturnType<typeof completeLmStudioTurn>>;
       try { turn = await completeLmStudioTurn({ messages, tools: executor.definitions, signal: turnSignal, stream: true,
         onReasoningDelta: (delta) => { reasoningTail = (reasoningTail + delta).slice(-160); reasoningChars += delta.length; },
+        onToolDraftProgress: (progress) => {
+          const name = executor.definitions.some((definition) => definition.function.name === progress.name)
+            ? progress.name! : "tool";
+          toolDraft = { name, argumentChars: progress.argumentChars, updatedAt: Date.now() };
+        },
         onTokenBudget: async (measured) => {
           budget = measured;
           await reportQueueStatus(`Splash prompt: ${measured.promptTokens.toLocaleString("en-US")} tokens; output allowance: ${measured.maxOutputTokens.toLocaleString("en-US")} tokens.`);

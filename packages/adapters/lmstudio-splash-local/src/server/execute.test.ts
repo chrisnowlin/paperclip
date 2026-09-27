@@ -69,6 +69,8 @@ describe("direct LM Studio Splash heartbeat", () => {
     expect(actionlessTurnExhausted(9 * 60_000, 2_000, 0)).toBe(false);
     expect(actionlessTurnExhausted(7 * 60_000, 25_000, 0)).toBe(false);
     expect(actionlessTurnExhausted(8 * 60_000, 0, 80_000)).toBe(true);
+    expect(actionlessTurnExhausted(9 * 60_000, 25_000, 0, 30_000)).toBe(false);
+    expect(actionlessTurnExhausted(9 * 60_000, 25_000, 0, 60_000)).toBe(true);
   });
 
   it("stops a costly actionless model turn before the hard deadline without invoking another provider", async () => {

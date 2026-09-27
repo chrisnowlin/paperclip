@@ -111,7 +111,9 @@ export async function readSplashDecodeTokens(fetcher: typeof fetch = fetch, sign
   } catch { return null; }
 }
 
-async function readSplashStream(response: Response, signal: AbortSignal, onReasoningDelta?: (delta: string) => void): Promise<unknown> {
+async function readSplashStream(response: Response, signal: AbortSignal,
+  onReasoningDelta?: (delta: string) => void,
+  onToolDraftProgress?: (progress: { name: string | null; argumentChars: number }) => void): Promise<unknown> {
   if (!response.body) throw new Error("Splash returned an empty stream.");
   const reader = response.body.getReader();
   let onAbort: (() => void) | null = null;
@@ -175,6 +177,9 @@ async function readSplashStream(response: Response, signal: AbortSignal, onReaso
       }
       if (call.arguments.length > 65_536) throw new Error("Splash stream tool arguments exceed the size limit.");
       calls.set(index, call);
+      try { onToolDraftProgress?.({ name: call.name ?? null,
+        argumentChars: [...calls.values()].reduce((sum, item) => sum + item.arguments.length, 0) }); }
+      catch { /* progress cannot interrupt inference */ }
     }
   };
   try {
@@ -215,6 +220,7 @@ export async function completeLmStudioTurn(input: {
   onTokenBudget?: (budget: { promptTokens: number; maxOutputTokens: number }) => void | Promise<void>;
   stream?: boolean;
   onReasoningDelta?: (delta: string) => void;
+  onToolDraftProgress?: (progress: { name: string | null; argumentChars: number }) => void;
 }): Promise<{ content: string | null; toolCalls: LmStudioToolCall[]; usage: { inputTokens: number; outputTokens: number } }> {
   const fetcher = input.fetcher ?? fetch;
   const sizingBody = JSON.stringify({
@@ -283,7 +289,7 @@ export async function completeLmStudioTurn(input: {
   }
   if (!response.ok) throw new Error(`Splash inference failed with HTTP ${response.status}; no alternate provider was tried.`);
   let body: unknown;
-  try { body = input.stream ? await readSplashStream(response, signal, input.onReasoningDelta) : await readBoundedJson(response); }
+  try { body = input.stream ? await readSplashStream(response, signal, input.onReasoningDelta, input.onToolDraftProgress) : await readBoundedJson(response); }
   catch (error) {
     if (signal.aborted) throw new Error("App-owned Splash turn was cancelled or exceeded its 25-minute local limit; no alternate provider was tried.");
     throw error;
