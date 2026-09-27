@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -196,6 +196,8 @@ describe("Paperclip-owned LM Studio coding tools", () => {
 
   it("offers CTO-only hiring with explicit Splash or GLM 5.3 Flash routes", async () => {
     const root = await workspace();
+    const hireWorkspaceRoot = path.join(root, "agent-workspaces");
+    await mkdir(hireWorkspaceRoot);
     const opencodeCommand = path.join(root, "opencode-test");
     await writeFile(opencodeCommand, "test executable");
     const ctoAgentId = "11111111-1111-4111-8111-111111111111";
@@ -218,7 +220,7 @@ describe("Paperclip-owned LM Studio coding tools", () => {
 
     const cto = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-cto",
       authToken: "private-run-token", apiUrl: "http://127.0.0.1:3319", fetcher,
-      ctoAgentId, glmOpenCodeCommand: opencodeCommand });
+      ctoAgentId, hireWorkspaceRoot, glmOpenCodeCommand: opencodeCommand });
     expect(cto.definitions.map((tool) => tool.function.name)).toContain("hire_coder");
     const splash = JSON.parse(await cto.execute(call("hire_coder", {
       name: "Private Coder", route: "splash_local", capabilities: "Private TypeScript code and focused tests",
@@ -230,12 +232,14 @@ describe("Paperclip-owned LM Studio coding tools", () => {
     expect(glm).toMatchObject({ route: "glm_5_3_flash", adapterType: "opencode_local",
       model: "zai-coding-plan/glm-5.3-flash", reused: false });
     expect(posts).toHaveLength(2);
+    const canonicalHireRoot = await realpath(hireWorkspaceRoot);
     expect(posts[0]).toMatchObject({ role: "engineer", reportsTo: ctoAgentId,
-      adapterType: "lmstudio_splash_local", adapterConfig: {},
+      adapterType: "lmstudio_splash_local", adapterConfig: { cwd: path.join(canonicalHireRoot, "private-coder") },
       metadata: { localHiringRoute: "splash_local", hiredByAgentId: ctoAgentId, hiringRunId: "run-cto" } });
     expect(posts[1]).toMatchObject({ role: "engineer", reportsTo: ctoAgentId,
       adapterType: "opencode_local", adapterConfig: { model: "zai-coding-plan/glm-5.3-flash",
-        command: opencodeCommand } });
+        command: opencodeCommand, cwd: path.join(canonicalHireRoot, "fast-qa") } });
+    expect(await realpath(path.join(hireWorkspaceRoot, "private-coder"))).toBe(path.join(canonicalHireRoot, "private-coder"));
     expect(JSON.stringify(posts)).not.toContain("private-run-token");
     expect(JSON.stringify(posts)).not.toContain("OPENAI_API_KEY");
     const reused = JSON.parse(await cto.execute(call("hire_coder", {

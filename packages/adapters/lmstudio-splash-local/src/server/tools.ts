@@ -214,6 +214,7 @@ export async function createLmStudioToolExecutor(input: {
   fetcher?: typeof fetch;
   onSpawn?: (meta: { pid: number; processGroupId: number | null; startedAt: string }) => Promise<void>;
   ctoAgentId?: string;
+  hireWorkspaceRoot?: string;
   glmOpenCodeCommand?: string;
 }): Promise<{ definitions: LmStudioToolDefinition[]; execute(call: LmStudioToolCall): Promise<string> }> {
   if (!path.isAbsolute(input.workspace)) throw new Error("The selected workspace must be absolute.");
@@ -311,8 +312,19 @@ export async function createLmStudioToolExecutor(input: {
             throw new Error("A company agent already has this name; choose a distinct coder name.");
           }
           if (newHireCount >= MAX_CTO_HIRES_PER_RUN) throw new Error("CTO hiring limit for this run reached.");
+          if (!input.hireWorkspaceRoot || !path.isAbsolute(input.hireWorkspaceRoot)) {
+            throw new Error("CTO agent workspace root is unavailable for hiring.");
+          }
+          const hireRoot = await fs.realpath(input.hireWorkspaceRoot).catch(() => null);
+          if (!hireRoot || path.basename(hireRoot) !== "agent-workspaces") {
+            throw new Error("CTO agent workspace root is unavailable for hiring.");
+          }
           const opencodeCommand = input.glmOpenCodeCommand ?? path.join(os.homedir(), ".opencode", "bin", "opencode");
-          const adapterConfig = route === "splash_local" ? {} : {
+          const slug = name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+          if (!slug) throw new Error("Coder name does not make a valid local workspace name.");
+          const hireCwd = path.join(hireRoot, slug);
+          const adapterConfig = route === "splash_local" ? { cwd: hireCwd } : {
+            cwd: hireCwd,
             model: GLM_FLASH_MODEL,
             command: opencodeCommand,
             timeoutSec: 600,
@@ -321,6 +333,13 @@ export async function createLmStudioToolExecutor(input: {
             if (!path.isAbsolute(opencodeCommand)) throw new Error("Configured OpenCode executable path is invalid.");
             const cli = await fs.stat(opencodeCommand).catch(() => null);
             if (!cli?.isFile()) throw new Error("Configured OpenCode executable for GLM 5.3 Flash is unavailable.");
+          }
+          try { await fs.mkdir(hireCwd, { mode: 0o700 }); }
+          catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+              throw new Error("A local workspace already exists for this coder name; choose another name.");
+            }
+            throw error;
           }
           const createdRaw = await requestPaperclip("POST", agentPath, {
             name, title, role: "engineer", capabilities, reportsTo: input.ctoAgentId,

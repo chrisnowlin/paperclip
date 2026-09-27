@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { AdapterExecutionContext, AdapterExecutionResult, RuntimeStatusPhase } from "@paperclipai/adapter-utils";
 import { buildPaperclipEnv, joinPromptSections, renderPaperclipWakePrompt, selectPaperclipTaskMarkdown } from "@paperclipai/adapter-utils/server-utils";
 import { completeLmStudioTurn, LMSTUDIO_SPLASH_MODEL, probeLmStudioSplash, readSplashDecodeTokens, type LmStudioMessage } from "./model.js";
@@ -181,7 +182,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     }
     const executor = await createLmStudioToolExecutor({ workspace: cwd, companyId: ctx.agent.companyId,
       runId: ctx.runId, authToken: ctx.authToken, apiUrl, signal: runSignal, onSpawn: ctx.onSpawn,
-      ctoAgentId: ctx.agent.role === "cto" ? ctx.agent.id : undefined });
+      ctoAgentId: ctx.agent.role === "cto" ? ctx.agent.id : undefined,
+      hireWorkspaceRoot: ctx.agent.role === "cto" && typeof ctx.config.cwd === "string"
+        ? path.dirname(ctx.config.cwd) : undefined });
     const modelTools = dispositionOnly ? executor.definitions
       .filter((definition) => definition.function.name === "paperclip_request")
       .map((definition) => ({ ...definition, function: {
