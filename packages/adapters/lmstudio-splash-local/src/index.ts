@@ -25,5 +25,6 @@ Do not use when:
 The model and endpoint are fixed. There are no login, API key, alternate provider, or fallback settings.
 Paperclip's run JWT remains outside the model prompt and is used only for approved task tools.
 Coding commands execute with the local server user's authority in the assigned workspace.
+For a project task, register_deliverable can attach a finished file of up to 10 MB from the assigned workspace to that task. The attachment automatically creates an artifact work product and returns a board download path.
 Live long-turn status can show a short local reasoning excerpt and approximate token count; the excerpt is not written to the run log. Partial streamed tool calls are never executed.
 `;

@@ -1,4 +1,5 @@
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +15,48 @@ async function workspace() {
 const call = (name: string, args: Record<string, unknown>) => ({ id: `call-${name}`, name, arguments: args });
 
 describe("Paperclip-owned LM Studio coding tools", () => {
+  it("registers a current-task workspace artifact with run auth and a durable receipt", async () => {
+    const root = await workspace();
+    const taskId = "11111111-1111-4111-8111-111111111111";
+    const content = Buffer.from("portable game build");
+    const digest = createHash("sha256").update(content).digest("hex");
+    await writeFile(path.join(root, "game.zip"), content);
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      id: "attachment-1", issueId: taskId, byteSize: content.length, sha256: digest,
+      contentPath: "/api/attachments/attachment-1/content",
+    }), { status: 201 }));
+    const tools = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-1",
+      taskId, authToken: "private-run-token", apiUrl: "http://127.0.0.1:3319", fetcher });
+    expect(tools.definitions.map((tool) => tool.function.name)).toContain("register_deliverable");
+    const result = JSON.parse(await tools.execute(call("register_deliverable", { path: "game.zip" })));
+    expect(result).toMatchObject({ attachmentId: "attachment-1", byteSize: content.length,
+      sha256: digest, downloadPath: "/api/attachments/attachment-1/content?download=1" });
+    expect(JSON.stringify(result)).not.toContain("private-run-token");
+    expect(fetcher).toHaveBeenCalledOnce();
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(url).toBe(`http://127.0.0.1:3319/api/companies/company-1/issues/${taskId}/attachments`);
+    expect(init).toMatchObject({ method: "POST", headers: { Authorization: "Bearer private-run-token",
+      "X-Paperclip-Run-Id": "run-1" }, redirect: "error" });
+    expect(init?.body).toBeInstanceOf(FormData);
+    expect((init?.body as FormData).get("file")).toBeInstanceOf(File);
+  });
+
+  it("rejects artifact escapes and does not retry uncertain uploads", async () => {
+    const root = await workspace();
+    const outside = await workspace();
+    await writeFile(path.join(outside, "private.zip"), "outside");
+    await symlink(outside, path.join(root, "escape"));
+    const fetcher = vi.fn<typeof fetch>().mockRejectedValue(new Error("connection lost"));
+    const tools = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-1",
+      taskId: "11111111-1111-4111-8111-111111111111", authToken: "private-run-token",
+      apiUrl: "http://127.0.0.1:3319", fetcher });
+    await expect(tools.execute(call("register_deliverable", { path: "escape/private.zip" }))).rejects.toThrow("workspace");
+    expect(fetcher).not.toHaveBeenCalled();
+    await writeFile(path.join(root, "game.zip"), "build");
+    await expect(tools.execute(call("register_deliverable", { path: "game.zip" }))).rejects.toThrow("uncertain");
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
   it("lists, reads, and atomically writes files inside the selected workspace", async () => {
     const root = await workspace();
     await writeFile(path.join(root, "README.md"), "Before\n");

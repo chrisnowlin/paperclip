@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +12,8 @@ const MAX_OUTPUT_BYTES = 65_536;
 const MAX_HTTP_BYTES = 65_536;
 const MAX_ARGUMENTS = 64;
 const MAX_COMMAND_MS = 300_000;
+const MAX_DELIVERABLE_BYTES = 10 * 1024 * 1024;
+const ISSUE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const GLM_FLASH_MODEL = "zai-coding-plan/glm-5.3-flash";
 const MAX_CTO_HIRES_PER_RUN = 3;
 
@@ -34,6 +36,21 @@ export const LMSTUDIO_TOOL_DEFINITIONS: LmStudioToolDefinition[] = [
   { type: "function", function: { name: "paperclip_request", description: "Call Paperclip with run auth. GET /api/companies/{companyId}/issues or /agents, /api/issues/{issueId} or /comments, /api/agents/{agentId}, or /api/agents/me; POST /api/companies/{companyId}/issues, /api/issues/{parentId}/children, or /api/issues/{issueId}/comments; PATCH /api/issues/{issueId}; PUT /api/issues/{issueId}/watchdog. For child tasks use POST /api/issues/{parentId}/children with body.idempotencyKey and blockParentUntilDone=true so the blocker is atomic. CTO hiring uses hire_coder. Paperclip still enforces company and actor access.",
     parameters: { ...object, properties: { method: { type: "string", enum: ["GET", "POST", "PATCH", "PUT"] }, path: { type: "string" }, body: { type: "object" } }, required: ["method", "path"] } } },
 ];
+
+const REGISTER_DELIVERABLE_TOOL_DEFINITION: LmStudioToolDefinition = {
+  type: "function", function: { name: "register_deliverable",
+    description: "Attach one finished file from this workspace to the current Paperclip task. The app registers its artifact work product automatically. Maximum 10 MB. Use the returned downloadPath in the final task comment. If the upload outcome is uncertain, do not retry blindly.",
+    parameters: { ...object, properties: { path: { type: "string" } }, required: ["path"] } },
+};
+
+function deliverableContentType(filename: string): string {
+  const extension = path.extname(filename).toLowerCase();
+  return ({ ".zip": "application/zip", ".html": "text/html", ".json": "application/json",
+    ".md": "text/markdown", ".txt": "text/plain", ".pdf": "application/pdf",
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".webp": "image/webp", ".mp4": "video/mp4", ".webm": "video/webm" } as Record<string, string>)[extension]
+    ?? "application/octet-stream";
+}
 
 const CTO_HIRE_TOOL_DEFINITION: LmStudioToolDefinition = {
   type: "function",
@@ -219,6 +236,7 @@ export async function createLmStudioToolExecutor(input: {
   ctoAgentId?: string;
   hireWorkspaceRoot?: string;
   glmOpenCodeCommand?: string;
+  taskId?: string | null;
 }): Promise<{ definitions: LmStudioToolDefinition[]; execute(call: LmStudioToolCall): Promise<string> }> {
   if (!path.isAbsolute(input.workspace)) throw new Error("The selected workspace must be absolute.");
   const root = await fs.realpath(input.workspace);
@@ -256,7 +274,9 @@ export async function createLmStudioToolExecutor(input: {
     return text;
   }
   return {
-    definitions: input.ctoAgentId ? [...LMSTUDIO_TOOL_DEFINITIONS, CTO_HIRE_TOOL_DEFINITION] : LMSTUDIO_TOOL_DEFINITIONS,
+    definitions: [...LMSTUDIO_TOOL_DEFINITIONS,
+      ...(input.taskId && ISSUE_ID_PATTERN.test(input.taskId) ? [REGISTER_DELIVERABLE_TOOL_DEFINITION] : []),
+      ...(input.ctoAgentId ? [CTO_HIRE_TOOL_DEFINITION] : [])],
     async execute(call) {
       if (input.signal?.aborted) throw new Error("Run cancelled.");
       if (!record(call.arguments)) throw new Error("Tool arguments must be an object.");
@@ -288,6 +308,50 @@ export async function createLmStudioToolExecutor(input: {
         }
         case "run_command":
           return await runCommand({ root, args: call.arguments, signal: input.signal, onSpawn: input.onSpawn });
+        case "register_deliverable": {
+          if (!input.taskId || !ISSUE_ID_PATTERN.test(input.taskId)) throw new Error("No current Paperclip task is bound to this run.");
+          const target = await resolveWorkspacePath(root, call.arguments.path, "existing");
+          const stat = await fs.stat(target);
+          if (!stat.isFile() || stat.size < 1 || stat.size > MAX_DELIVERABLE_BYTES) {
+            throw new Error("Deliverable must be a nonempty regular file no larger than 10 MB.");
+          }
+          const bytes = await fs.readFile(target);
+          if (bytes.length < 1 || bytes.length > MAX_DELIVERABLE_BYTES) {
+            throw new Error("Deliverable changed size while being read.");
+          }
+          const sha256 = createHash("sha256").update(bytes).digest("hex");
+          const filename = path.basename(target);
+          const form = new FormData();
+          form.set("file", new File([bytes], filename, { type: deliverableContentType(filename) }));
+          let response: Response;
+          try {
+            response = await (input.fetcher ?? fetch)(new URL(
+              `/api/companies/${encodeURIComponent(input.companyId)}/issues/${input.taskId}/attachments`, api).toString(), {
+              method: "POST", body: form, redirect: "error",
+              headers: { Authorization: `Bearer ${input.authToken}`, "X-Paperclip-Run-Id": input.runId },
+              signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000),
+            });
+          } catch { throw new UncertainPaperclipMutationError(); }
+          const responseText = await boundedText(response).catch(() => { throw new UncertainPaperclipMutationError(); });
+          if (!response.ok) {
+            if (response.status >= 500 || response.status === 408 || response.status === 409) {
+              throw new UncertainPaperclipMutationError();
+            }
+            throw new Error(`Paperclip deliverable upload failed with HTTP ${response.status}: ${responseText.slice(0, 1024)}`);
+          }
+          let receipt: unknown;
+          try { receipt = JSON.parse(responseText); }
+          catch { throw new UncertainPaperclipMutationError(); }
+          if (!record(receipt) || typeof receipt.id !== "string" || receipt.issueId !== input.taskId ||
+              receipt.byteSize !== bytes.length || receipt.sha256 !== sha256 ||
+              typeof receipt.contentPath !== "string" ||
+              receipt.contentPath !== `/api/attachments/${receipt.id}/content`) {
+            throw new UncertainPaperclipMutationError();
+          }
+          return JSON.stringify({ attachmentId: receipt.id, filename, byteSize: bytes.length, sha256,
+            contentPath: receipt.contentPath, downloadPath: `${receipt.contentPath}?download=1`,
+            workProduct: "The run attachment upload registered an artifact work product automatically." });
+        }
         case "hire_coder": {
           if (!input.ctoAgentId) throw new Error("Only the CTO can hire coders from this local run.");
           const name = textArg(call.arguments.name, "Coder name", 80).trim();
