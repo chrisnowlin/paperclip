@@ -787,6 +787,31 @@ describeEmbeddedPostgres("task watchdog scheduler", () => {
     expect(wakes).toHaveLength(1);
   });
 
+  it("waits for a live child watchdog review, then evaluates the parent when that review stops", async () => {
+    const companyId = await seedCompany();
+    const agentId = await seedAgent(companyId);
+    const sourceId = await seedIssue(companyId, { status: "todo", assigneeAgentId: agentId });
+    const childId = await seedIssue(companyId, { status: "blocked", parentId: sourceId, assigneeAgentId: agentId });
+    const reviewId = await seedIssue(companyId, { status: "in_progress", parentId: childId,
+      originKind: "task_watchdog", originId: childId,
+      originFingerprint: `task_watchdog:${companyId}:${childId}`, assigneeAgentId: agentId });
+    await seedWatchdog(companyId, sourceId, agentId);
+    await db.insert(issueWatchdogs).values({ companyId, issueId: childId,
+      watchdogAgentId: agentId, watchdogIssueId: reviewId, status: "active" });
+    const [run] = await db.insert(heartbeatRuns).values({ companyId, agentId, status: "running",
+      invocationSource: "automation", contextSnapshot: { issueId: reviewId } }).returning();
+    const { service, wakes } = createService();
+
+    expect(await service.reconcileForIssueAndAncestors(companyId, sourceId))
+      .toMatchObject({ checked: 1, triggered: 0 });
+    expect(wakes).toHaveLength(0);
+
+    await db.update(heartbeatRuns).set({ status: "failed" }).where(eq(heartbeatRuns.id, run!.id));
+    expect(await service.reconcileForIssueAndAncestors(companyId, sourceId))
+      .toMatchObject({ checked: 1, triggered: 1 });
+    expect(wakes).toHaveLength(1);
+  });
+
   it("does not defer once the freshly-created issue has a terminal run on record", async () => {
     const companyId = await seedCompany();
     const agentId = await seedAgent(companyId);

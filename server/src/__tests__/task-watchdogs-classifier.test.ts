@@ -70,6 +70,17 @@ describe("task watchdog subtree classifier", () => {
     expect(result.state).toBe("stopped");
   });
 
+  it("waits for a live child watchdog instead of duplicating its recovery", () => {
+    const issues = [issue(), issue({ id: childId, parentId: sourceId, status: "blocked" })];
+    expect(classify({ issues, liveDescendantWatchdogSourceIssueIds: [childId] }))
+      .toMatchObject({ state: "live", liveIssueIds: [childId] });
+    expect(classify({ issues, liveDescendantWatchdogSourceIssueIds: [] }).state).toBe("stopped");
+    expect(classify({
+      issues: [...issues, issue({ id: "child-2", parentId: sourceId, status: "todo" })],
+      liveDescendantWatchdogSourceIssueIds: [childId],
+    }).state).toBe("stopped");
+  });
+
   it("does not hide an unrelated idle leaf behind another leaf's active blocker", () => {
     const result = classify({
       issues: [

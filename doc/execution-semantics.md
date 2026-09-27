@@ -758,6 +758,8 @@ Changing the watchdog agent or custom instructions invalidates the reviewed fing
 
 An active watchdog issue or queued watchdog wake can be the visible recovery path for a stopped watched subtree, but it is not proof that the original deliverable work is complete. It means the next action is watchdog verification.
 
+If every unfinished leaf of a parent subtree is already covered by a live, narrower task-watchdog issue or an active external blocker, the parent watchdog waits instead of spending a second model turn on the same recovery. When the narrower review loses its live path without restoring the source work, the parent can evaluate the stopped tree again.
+
 When the source issue is non-terminal and has no other live path, the product should expose the watchdog issue or source-scoped recovery action as the reason the subtree is covered. When correctness requires the source issue to wait on watchdog review, the source issue should be blocked on the reusable watchdog issue or an equivalent explicit recovery action. Do not rely on parent/child structure alone.
 
 ### Watchdog authority during execution

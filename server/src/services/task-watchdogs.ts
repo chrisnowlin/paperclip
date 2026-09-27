@@ -195,6 +195,9 @@ export type TaskWatchdogClassifierInput = {
   // Non-terminal first-class blockers outside the watched subtree that have
   // a live run or queued wake. Waiting on them is an active dependency path.
   externalLiveBlockerIssueIds?: string[];
+  // Non-terminal leaves whose own task-watchdog issue has a live run or wake.
+  // A parent watcher waits for this narrower recovery path before duplicating it.
+  liveDescendantWatchdogSourceIssueIds?: string[];
   pendingInteractions?: TaskWatchdogClassifierWaitingPath[];
   pendingApprovals?: TaskWatchdogClassifierWaitingPath[];
   // Timestamp the evaluation reads its snapshot at. When provided together
@@ -476,14 +479,16 @@ export function classifyTaskWatchdogSubtree(input: TaskWatchdogClassifierInput):
     .filter((issue) => (includedChildrenByParentId.get(issue.id) ?? []).length === 0)
     .filter((issue) => !isTerminalIssueStatus(issue.status));
   const liveExternalBlockerIds = new Set(input.externalLiveBlockerIssueIds ?? []);
+  const liveDescendantWatchdogSources = new Set(input.liveDescendantWatchdogSourceIssueIds ?? []);
   if (nonTerminalLeaves.length > 0 && nonTerminalLeaves.every((issue) =>
+    liveDescendantWatchdogSources.has(issue.id) ||
     (blockersByIssueId.get(issue.id) ?? []).some((blockerId) => liveExternalBlockerIds.has(blockerId))
   )) {
     return {
       state: "live",
-      reason: "Every unfinished leaf is waiting on a first-class blocker with a live run or queued wake.",
+      reason: "Every unfinished leaf is waiting on a live external blocker or a narrower task-watchdog review.",
       includedIssueIds: includedIds,
-      liveIssueIds: [...liveExternalBlockerIds].sort(),
+      liveIssueIds: [...new Set([...liveExternalBlockerIds, ...liveDescendantWatchdogSources])].sort(),
     };
   }
 
@@ -943,6 +948,46 @@ export function taskWatchdogService(db: Db, deps: TaskWatchdogServiceDeps = {}) 
     return (Array.isArray(rows) ? rows : []) as TaskWatchdogClassifierIssue[];
   }
 
+  async function collectLiveIssueIds(companyId: string, candidateIssueIds: string[]) {
+    if (candidateIssueIds.length === 0) return [];
+    const [candidateIssues, runRows, issueRunRows, wakeRows] = await Promise.all([
+      db.select({ id: issues.id, status: issues.status }).from(issues).where(and(
+        eq(issues.companyId, companyId), inArray(issues.id, candidateIssueIds), visibleIssueCondition(),
+      )),
+      db.select({ contextSnapshot: heartbeatRuns.contextSnapshot }).from(heartbeatRuns).where(and(
+        eq(heartbeatRuns.companyId, companyId),
+        inArray(heartbeatRuns.status, [...TASK_WATCHDOG_LIVE_RUN_STATUSES]),
+        or(
+          inArray(sql`${heartbeatRuns.contextSnapshot}->>'issueId'`, candidateIssueIds),
+          inArray(sql`${heartbeatRuns.contextSnapshot}->>'taskId'`, candidateIssueIds),
+        ),
+      )),
+      db.select({ issueId: issues.id }).from(issues)
+        .innerJoin(heartbeatRuns, eq(issues.executionRunId, heartbeatRuns.id))
+        .where(and(
+          eq(issues.companyId, companyId), inArray(issues.id, candidateIssueIds),
+          inArray(heartbeatRuns.status, [...TASK_WATCHDOG_LIVE_RUN_STATUSES]),
+        )),
+      db.select({ payload: agentWakeupRequests.payload }).from(agentWakeupRequests).where(and(
+        eq(agentWakeupRequests.companyId, companyId),
+        inArray(agentWakeupRequests.status, [...TASK_WATCHDOG_WAKE_REQUEST_STATUSES]),
+        or(
+          inArray(sql`${agentWakeupRequests.payload}->>'issueId'`, candidateIssueIds),
+          inArray(sql`${agentWakeupRequests.payload}->>'taskId'`, candidateIssueIds),
+          inArray(sql`${agentWakeupRequests.payload}->'_paperclipWakeContext'->>'issueId'`, candidateIssueIds),
+          inArray(sql`${agentWakeupRequests.payload}->'_paperclipWakeContext'->>'taskId'`, candidateIssueIds),
+        ),
+      )),
+    ]);
+    const liveIds = new Set([
+      ...runRows.map((row) => issueIdFromRunContext(row.contextSnapshot)),
+      ...issueRunRows.map((row) => row.issueId),
+      ...wakeRows.map((row) => issueIdFromWakePayload(row.payload)),
+    ]);
+    return candidateIssues.filter((row) => !isTerminalIssueStatus(row.status) && liveIds.has(row.id))
+      .map((row) => row.id);
+  }
+
   async function collectClassifierInput(companyId: string, watchdog: IssueWatchdogRow) {
     const issueRows = await loadWatchdogSubtreeIssues(companyId, watchdog.issueId);
     const subtreeIssueIds = issueRows.map((issue) => issue.id);
@@ -953,6 +998,8 @@ export function taskWatchdogService(db: Db, deps: TaskWatchdogServiceDeps = {}) 
         activeRuns: [],
         queuedWakeRequests: [],
         blockers: [],
+        externalLiveBlockerIssueIds: [],
+        liveDescendantWatchdogSourceIssueIds: [],
         pendingInteractions: [],
         pendingApprovals: [],
         evaluatedAt: new Date(),
@@ -1104,50 +1151,27 @@ export function taskWatchdogService(db: Db, deps: TaskWatchdogServiceDeps = {}) 
     const externalBlockerIds = [...new Set(blockerRows
       .map((row) => row.blockerIssueId)
       .filter((id) => !subtreeIssueIdSet.has(id)))];
-    const externalLiveBlockerIssueIds: string[] = [];
-    if (externalBlockerIds.length > 0) {
-      const [blockerIssues, blockerRuns, blockerIssueRuns, blockerWakes] = await Promise.all([
-        db.select({ id: issues.id, status: issues.status }).from(issues).where(and(
-          eq(issues.companyId, companyId),
-          inArray(issues.id, externalBlockerIds),
-          visibleIssueCondition(),
-        )),
-        db.select({ contextSnapshot: heartbeatRuns.contextSnapshot }).from(heartbeatRuns).where(and(
-          eq(heartbeatRuns.companyId, companyId),
-          inArray(heartbeatRuns.status, [...TASK_WATCHDOG_LIVE_RUN_STATUSES]),
-          or(
-            inArray(sql`${heartbeatRuns.contextSnapshot}->>'issueId'`, externalBlockerIds),
-            inArray(sql`${heartbeatRuns.contextSnapshot}->>'taskId'`, externalBlockerIds),
-          ),
-        )),
-        db.select({ issueId: issues.id }).from(issues)
-          .innerJoin(heartbeatRuns, eq(issues.executionRunId, heartbeatRuns.id))
-          .where(and(
-            eq(issues.companyId, companyId),
-            inArray(issues.id, externalBlockerIds),
-            inArray(heartbeatRuns.status, [...TASK_WATCHDOG_LIVE_RUN_STATUSES]),
-          )),
-        db.select({ payload: agentWakeupRequests.payload }).from(agentWakeupRequests).where(and(
-          eq(agentWakeupRequests.companyId, companyId),
-          inArray(agentWakeupRequests.status, [...TASK_WATCHDOG_WAKE_REQUEST_STATUSES]),
-          or(
-            inArray(sql`${agentWakeupRequests.payload}->>'issueId'`, externalBlockerIds),
-            inArray(sql`${agentWakeupRequests.payload}->>'taskId'`, externalBlockerIds),
-            inArray(sql`${agentWakeupRequests.payload}->'_paperclipWakeContext'->>'issueId'`, externalBlockerIds),
-            inArray(sql`${agentWakeupRequests.payload}->'_paperclipWakeContext'->>'taskId'`, externalBlockerIds),
-          ),
-        )),
-      ]);
-      const eligibleBlockerIds = new Set(blockerIssues
-        .filter((row) => !isTerminalIssueStatus(row.status))
-        .map((row) => row.id));
-      const liveBlockerIds = new Set([
-        ...blockerRuns.map((row) => issueIdFromRunContext(row.contextSnapshot)),
-        ...blockerIssueRuns.map((row) => row.issueId),
-        ...blockerWakes.map((row) => issueIdFromWakePayload(row.payload)),
-      ]);
-      externalLiveBlockerIssueIds.push(...[...eligibleBlockerIds].filter((id) => liveBlockerIds.has(id)));
-    }
+    const childWatcherRows = await db.select({
+      sourceIssueId: issueWatchdogs.issueId,
+      reviewIssueId: issueWatchdogs.watchdogIssueId,
+    }).from(issueWatchdogs).where(and(
+      eq(issueWatchdogs.companyId, companyId),
+      eq(issueWatchdogs.status, "active"),
+      inArray(issueWatchdogs.issueId, subtreeIssueIds),
+    ));
+    const childReviewIssueIds = [...new Set(childWatcherRows
+      .filter((row) => row.sourceIssueId !== watchdog.issueId)
+      .map((row) => row.reviewIssueId)
+      .filter((id): id is string => typeof id === "string"))];
+    const [externalLiveBlockerIssueIds, liveReviewIssueIds] = await Promise.all([
+      collectLiveIssueIds(companyId, externalBlockerIds),
+      collectLiveIssueIds(companyId, childReviewIssueIds),
+    ]);
+    const liveReviewIssueIdSet = new Set(liveReviewIssueIds);
+    const liveDescendantWatchdogSourceIssueIds = childWatcherRows
+      .filter((row) => row.sourceIssueId !== watchdog.issueId && row.reviewIssueId &&
+        liveReviewIssueIdSet.has(row.reviewIssueId))
+      .map((row) => row.sourceIssueId);
 
     const evaluatedAt = new Date();
     const evaluatedAtMs = evaluatedAt.getTime();
@@ -1188,6 +1212,7 @@ export function taskWatchdogService(db: Db, deps: TaskWatchdogServiceDeps = {}) 
       })),
       blockers: blockerRows,
       externalLiveBlockerIssueIds,
+      liveDescendantWatchdogSourceIssueIds,
       pendingInteractions: interactionRows,
       pendingApprovals: approvalRows,
       evaluatedAt,
