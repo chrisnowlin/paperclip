@@ -140,9 +140,14 @@ done`,
       );
     return;
   }
-  let directory =
-    typeof config.cwd === "string" ? path.resolve(config.cwd) : process.cwd();
+  // A missing project cwd does not authorize inspection of the server's own
+  // checkout. Stop before the user's home so global provider preferences are
+  // not mistaken for a project's credential override.
+  if (typeof config.cwd !== "string" || !config.cwd.trim()) return;
+  let directory = path.resolve(config.cwd);
+  const userHome = os.homedir();
   for (;;) {
+    if (directory === userHome) break;
     for (const relative of files) {
       try {
         const content = await readFile(path.join(directory, relative), "utf8");

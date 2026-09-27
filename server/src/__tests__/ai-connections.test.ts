@@ -4,7 +4,7 @@ import { issueRecoveryActionService } from "../services/issue-recovery-actions.j
 import * as localCredentials from "../services/local-ai-credentials.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, access, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, access, readFile, writeFile, mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { and, eq, sql } from "drizzle-orm";
@@ -46,6 +46,26 @@ beforeAll(async () => {
 afterAll(async () => { await database?.cleanup(); vi.unstubAllEnvs(); if (home) await rm(home, { recursive: true, force: true }); });
 
 describe("managed AI connections", () => {
+  it("checks only an explicit project path and stops before the user's global provider config", async () => {
+    const fakeHome = await mkdtemp(path.join(os.tmpdir(), "paperclip-ai-project-auth-"));
+    const project = path.join(fakeHome, "worktrees", "project");
+    await mkdir(path.join(fakeHome, ".codex"), { recursive: true });
+    await mkdir(project, { recursive: true });
+    await writeFile(path.join(fakeHome, ".codex", "config.toml"), 'model_provider = "personal"\n');
+    const homeSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(fakeHome);
+    try {
+      await expect(assertManagedAiProjectAuth({}, "openai")).resolves.toBeUndefined();
+      await expect(assertManagedAiProjectAuth({ cwd: project }, "openai")).resolves.toBeUndefined();
+      await mkdir(path.join(project, ".codex"));
+      await writeFile(path.join(project, ".codex", "config.toml"), 'model_provider = "override"\n');
+      await expect(assertManagedAiProjectAuth({ cwd: project }, "openai")).rejects.toThrow("Project authentication settings conflict");
+    } finally {
+      cwdSpy.mockRestore();
+      homeSpy.mockRestore();
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
   it.each([
     ["anthropic", "claude_local", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
     ["openai", "codex_local", "CODEX_HOME", "OPENAI_API_KEY"],
