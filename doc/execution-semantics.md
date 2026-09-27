@@ -695,6 +695,16 @@ Keep the three watchdog/recovery concepts separate:
 
 A source issue may have at most one active task watchdog configuration. The configuration names a same-company, invokable watchdog agent and optional custom instructions.
 
+For app-owned local Splash task runs, the adapter ensures that the source issue
+has a watchdog before inference begins. If none exists, it assigns the same
+local agent as a default reviewer of stopped work. An explicit named watchdog
+already assigned by the company is preserved. Watchdog-origin issues never
+register another watchdog, so review cannot recurse. Setup failure is shown in
+the run's live status and does not prevent productive work. This registration
+does not shorten the 25-minute model turn or claim that a still-running turn is
+stalled; it supplies an agent-owned review path when a source subtree later
+stops without a valid live or waiting path.
+
 The scan scope is:
 
 - the source issue

@@ -8,15 +8,50 @@ import { createLmStudioToolExecutor, InterruptedCodingCommandError, UncertainPap
 const MAX_TOOL_CALLS = 48;
 const MAX_RUN_MS = 2 * 60 * 60 * 1_000;
 const MAX_QUEUE_WAIT_MS = 2 * 60 * 60 * 1_000;
+const WATCHDOG_SETUP_TIMEOUT_MS = 5_000;
+const ISSUE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function record(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+async function ensureLocalTaskWatchdog(input: {
+  apiUrl: string;
+  issueId: string | null;
+  agentId: string;
+  authToken: string;
+  signal: AbortSignal;
+}): Promise<boolean> {
+  if (!input.issueId || !ISSUE_ID_PATTERN.test(input.issueId)) return true;
+  const signal = AbortSignal.any([input.signal, AbortSignal.timeout(WATCHDOG_SETUP_TIMEOUT_MS)]);
+  const base = input.apiUrl.endsWith("/") ? input.apiUrl : `${input.apiUrl}/`;
+  const issueUrl = new URL(`issues/${input.issueId}`, base);
+  const watchdogUrl = new URL(`issues/${input.issueId}/watchdog`, base);
+  const headers = { Authorization: `Bearer ${input.authToken}` };
+  try {
+    const sourceResponse = await fetch(issueUrl.toString(), { headers, signal });
+    if (!sourceResponse.ok) return false;
+    const source = record(await sourceResponse.json());
+    if (source.id !== input.issueId || source.originKind === "task_watchdog" ||
+        source.status === "done" || source.status === "cancelled") return true;
+    const existingResponse = await fetch(watchdogUrl.toString(), { headers, signal });
+    if (!existingResponse.ok) return false;
+    if (await existingResponse.json() !== null) return true;
+    const created = await fetch(watchdogUrl.toString(), { method: "PUT", signal,
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ agentId: input.agentId,
+        instructions: "Review this stopped local Splash task and its existing work. If the task is too broad or a run made no durable progress, preserve files, split the remaining work into one bounded local child with the same project workspace, set first-class dependencies, and record the decision. Verify before marking done. Do not retry the same scope indefinitely or route private source to a remote provider." }),
+    });
+    return created.ok;
+  } catch {
+    return false;
+  }
+}
+
 function systemGuidance(role: string | undefined): string {
   const base = "You are a local Paperclip coding agent. Use the provided tools for workspace and task actions. Run only commands that exit; a foreground dev server times out and aborts your task. Use a production build for bounded verification and ask the board to check the browser when needed. Never request credentials or alternate model endpoints. Keep local task details with app-managed Splash agents; do not assign a child to a remote or paid-provider agent without explicit board authorization and a named account binding. Report completed work clearly before the model-step limit.";
-  if (role === "cto" || role === "ceo") return `${base} If the current issue asks for implementation, implement its scoped deliverable yourself after brief inspection, run a finite check, and report the result; your coordinator title is not a request to delegate that work. Only when the issue asks for coordination or decomposition, first inspect the issue and existing child issues. For multiple independently verifiable deliverables, create at most three narrow child issues with explicit assignees, one deliverable and one acceptance check each. Record the task-to-agent decision in a parent comment and set dependencies so work builds toward completion. Do not duplicate existing children or implement child work in that coordination turn. Use an idempotency key for every task creation.`;
-  return `${base} Complete one scoped deliverable at a time. If the assignment spans several independent deliverables, report the split needed to the coordinator before starting unrelated work.`;
+  if (role === "cto" || role === "ceo") return `${base} If the current issue asks for implementation, implement its scoped deliverable yourself after brief inspection, run a finite check, and report the result; your coordinator title is not a request to delegate that work. Only when the issue asks for coordination or decomposition, first inspect the issue and existing child issues. For multiple independently verifiable deliverables, create at most three narrow child issues with explicit assignees, one deliverable and one acceptance check each. Give each local coding child the parent's project and project workspace at creation; create dependencies in the same request so a child cannot wake before its blocker finishes. Record the task-to-agent decision in a parent comment. Keep the parent blocked on unfinished children through first-class blocker links, and verify their results before marking the parent done. Configure a task watchdog on the coordinating parent with a different same-company local agent so a stopped subtree gets reviewed; never give the watchdog a paid-provider account or private source through a remote agent. Do not duplicate existing children or implement child work in that coordination turn. Use an idempotency key for every task creation.`;
+  return `${base} Complete one scoped deliverable at a time. If the assignment spans several independent deliverables, land the smallest verifiable slice first, report exactly what remains to the coordinator, and avoid starting unrelated work. If a turn has made no tool progress, make the next action a bounded read, write, or task update rather than extending private reasoning indefinitely.`;
 }
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
@@ -46,6 +81,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ? AbortSignal.any([ctx.signal, AbortSignal.timeout(MAX_RUN_MS)])
       : AbortSignal.timeout(MAX_RUN_MS);
     const apiUrl = buildPaperclipEnv(ctx.agent).PAPERCLIP_API_URL;
+    const selfWatchdogReady = await ensureLocalTaskWatchdog({
+      apiUrl, issueId: typeof ctx.context.taskId === "string" ? ctx.context.taskId : null,
+      agentId: ctx.agent.id, authToken: ctx.authToken, signal: runSignal,
+    });
+    if (!selfWatchdogReady) {
+      await reportQueueStatus("Local task watchdog setup was unavailable; this run continues and task recovery needs review.");
+    }
     const executor = await createLmStudioToolExecutor({ workspace: cwd, companyId: ctx.agent.companyId,
       runId: ctx.runId, authToken: ctx.authToken, apiUrl, signal: runSignal, onSpawn: ctx.onSpawn });
     const wake = renderPaperclipWakePrompt(ctx.context.paperclipWake);

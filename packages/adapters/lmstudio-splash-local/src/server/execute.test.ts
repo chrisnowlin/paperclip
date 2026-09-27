@@ -64,6 +64,48 @@ function context(root: string) {
 }
 
 describe("direct LM Studio Splash heartbeat", () => {
+  it("installs a local self-watchdog for a task and preserves a named existing watcher", async () => {
+    const root = await workspace();
+    const issueId = "8eab2670-f2b8-4d0c-8f95-d595a1c30f78";
+    const agentId = "cc349b6e-bb92-45c3-b16c-e5f69c971015";
+    const requests: Array<{ url: string; method: string; body: string | null }> = [];
+    let existingWatchdog: unknown = null;
+    let sourceOriginKind: string | null = null;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      requests.push({ url, method, body: init?.body ? String(init.body) : null });
+      if (url.endsWith(`/issues/${issueId}`)) return new Response(JSON.stringify({ id: issueId, originKind: sourceOriginKind }));
+      if (url.endsWith(`/issues/${issueId}/watchdog`)) {
+        return new Response(JSON.stringify(method === "PUT" ? { id: "watchdog-new" } : existingWatchdog));
+      }
+      const readiness = splashReadiness(url);
+      if (readiness) return readiness;
+      return streamTurn(finalTurn);
+    }));
+    const run = () => execute({
+      runId: "run-self-watch", agent: { id: agentId, companyId: "company-1", name: "Local", role: "engineer",
+        adapterType: "lmstudio_splash_local", adapterConfig: {} },
+      runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+      config: { cwd: root }, context: { ...context(root), taskId: issueId },
+      authToken: "private-run-token", onLog: async () => {},
+    });
+    await run();
+    const writes = requests.filter((request) => request.method === "PUT");
+    expect(writes).toHaveLength(1);
+    expect(JSON.parse(writes[0]!.body!)).toMatchObject({ agentId });
+    expect(writes[0]!.url).toContain(`/issues/${issueId}/watchdog`);
+    expect(JSON.stringify(requests)).not.toContain("private-run-token");
+    existingWatchdog = { id: "named-watchdog", watchdogAgentId: "another-local-agent" };
+    requests.length = 0;
+    await run();
+    expect(requests.filter((request) => request.method === "PUT")).toHaveLength(0);
+    sourceOriginKind = "task_watchdog";
+    existingWatchdog = null;
+    requests.length = 0;
+    await run();
+    expect(requests.filter((request) => request.url.endsWith(`/issues/${issueId}/watchdog`))).toHaveLength(0);
+  });
+
   it("routes broad CTO work toward named, bounded child assignments", async () => {
     const root = await workspace();
     const requests: Array<Record<string, unknown>> = [];
@@ -86,6 +128,9 @@ describe("direct LM Studio Splash heartbeat", () => {
     expect(system).toContain("explicit assignees");
     expect(system).toContain("idempotency key");
     expect(system).toContain("named account binding");
+    expect(system).toContain("project workspace");
+    expect(system).toContain("task watchdog");
+    expect(system).toContain("Keep the parent blocked on unfinished children");
     expect(logs.join("")).not.toContain("PRIVATE_LOCAL_REASONING");
   });
 
