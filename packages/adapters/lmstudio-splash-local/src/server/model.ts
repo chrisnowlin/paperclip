@@ -111,9 +111,15 @@ export async function readSplashDecodeTokens(fetcher: typeof fetch = fetch, sign
   } catch { return null; }
 }
 
-async function readSplashStream(response: Response, onReasoningDelta?: (delta: string) => void): Promise<unknown> {
+async function readSplashStream(response: Response, signal: AbortSignal, onReasoningDelta?: (delta: string) => void): Promise<unknown> {
   if (!response.body) throw new Error("Splash returned an empty stream.");
   const reader = response.body.getReader();
+  let onAbort: (() => void) | null = null;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(new Error("Splash stream was cancelled."));
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  });
   const decoder = new TextDecoder();
   const calls = new Map<number, { id?: string; type?: string; name?: string; arguments: string }>();
   let frameBuffer = "";
@@ -173,7 +179,7 @@ async function readSplashStream(response: Response, onReasoningDelta?: (delta: s
   };
   try {
     while (!done) {
-      const next = await reader.read();
+      const next = await Promise.race([reader.read(), aborted]);
       if (next.done) break;
       bytes += next.value.byteLength;
       if (bytes > MAX_STREAM_BYTES) throw new Error("Splash stream exceeds the size limit.");
@@ -188,8 +194,11 @@ async function readSplashStream(response: Response, onReasoningDelta?: (delta: s
       if (frameBuffer.length > MAX_STREAM_FRAME_CHARS) throw new Error("Splash stream frame exceeds the size limit.");
     }
   } finally {
-    if (done) await reader.cancel().catch(() => undefined);
-    reader.releaseLock();
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+    // reader.read() may still be pending after the abort won the race. Do not
+    // await transport cancellation or let an unresponsive peer pin the turn.
+    void reader.cancel().catch(() => undefined);
+    try { reader.releaseLock(); } catch { /* cancellation releases the reader */ }
   }
   if (!done || finishReason === null) throw new Error("Splash stream ended before completion; no partial tools were run.");
   return { choices: [{ finish_reason: finishReason, message: { role: "assistant", content: content || null,
@@ -274,7 +283,7 @@ export async function completeLmStudioTurn(input: {
   }
   if (!response.ok) throw new Error(`Splash inference failed with HTTP ${response.status}; no alternate provider was tried.`);
   let body: unknown;
-  try { body = input.stream ? await readSplashStream(response, input.onReasoningDelta) : await readBoundedJson(response); }
+  try { body = input.stream ? await readSplashStream(response, signal, input.onReasoningDelta) : await readBoundedJson(response); }
   catch (error) {
     if (signal.aborted) throw new Error("App-owned Splash turn was cancelled or exceeded its 25-minute local limit; no alternate provider was tried.");
     throw error;

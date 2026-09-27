@@ -89,9 +89,13 @@ describe("direct LM Studio Splash heartbeat", () => {
       if (readiness) return readiness;
       completions += 1;
       resolveStarted();
-      return await new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
-      });
+      // The HTTP response has arrived but its SSE body never closes. Aborting
+      // only the fetch request is insufficient once reader.read() is pending.
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"reasoning_content":"thinking"},"finish_reason":null}]}\n\n'));
+        },
+      }), { headers: { "Content-Type": "text/event-stream" } });
     }));
     const logs: string[] = [];
     const run = execute({
