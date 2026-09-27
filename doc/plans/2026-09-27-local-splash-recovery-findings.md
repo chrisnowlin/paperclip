@@ -1,0 +1,12 @@
+# Local Splash execution recovery findings (2026-09-27)
+
+These are live observations from the separate Splash company in V2. The governed-cockpit worktree was not changed. The one-model Splash queue itself serialized active inference; issue dispatch and recovery still admitted work that should have waited.
+
+- A completed issue could start a duplicate continuation and return to `in_progress` or `blocked`. After SPL-39 was built, browser-verified, and marked done, run `de7bd73e-6e91-4340-a0e1-84e4a2e7d67e` took the model slot for SPL-39 again while SPL-40 waited. The board had to stop the duplicate. Similar queued duplicates occurred after SPL-28, SPL-35, and SPL-36.
+- A dependent issue could acquire a queued run before its blocker was done. SPL-22 run `8f03cfbb-a168-4fc7-8fc3-394d646076e8` queued while the shared-core work was still blocked. The board canceled it before model admission. Its old execution blocker then prevented routine reuse, requiring an auditable replacement task.
+- Board cancellation of a *running* Splash turn sometimes returned HTTP 500 while the run stayed `running`/`reconnecting` with an operator-cancel error and no active Splash inference (for example SPL-16 run `b31da56e-ae69-4278-8f8c-f9c5bbe01e69`). A graceful V2 app shutdown made the run terminal. Queued-run cancellation returned HTTP 409 even when the run became `cancelled`.
+- Periodic recovery sometimes surfaced canceled or board-completed issues as `blocked` or `in_progress` again because older failed-run reconciliation remained attached. The board preserved the clean game commits, documented supersession, and created fresh project-bound issues rather than replay uncertain work.
+
+The relevant code paths appear to include `server/src/services/recovery/service.ts`, `server/src/services/legacy-execution-recovery.ts`, `server/src/services/execution-recovery-resolution.ts`, and the board cancel route in `server/src/routes/agents.ts`. This is a routing hypothesis, not a confirmed root cause. Before changing the governed cockpit, add focused tests for claim-time blocker/status checks, a terminal board-completed disposition, and bounded cancellation/readback of queued versus active local runs.
+
+Integration note: this branch starts at clean V2 commit `0275510`. The main V2 checkout is clean at that commit, but `origin/codex/governed-cockpit-v2` has not received its nine local commits; opening a PR against that remote branch now would include the governed-cockpit work. Keep the Splash branch separate until the main V2 owner publishes its base.
