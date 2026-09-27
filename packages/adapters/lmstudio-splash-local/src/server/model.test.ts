@@ -68,8 +68,11 @@ describe("LM Studio Splash model route", () => {
     }));
     const sent = JSON.parse(String(fetcher.mock.calls.find(([url]) => String(url).endsWith("/v1/chat/completions"))?.[1]?.body));
     expect(sent.model).toBe("qwen3.8-27b-splash");
+    expect(sent.reasoning_effort).toBe("medium");
     expect(sent.max_tokens).toBe(222_722);
     expect(sent.tools).toHaveLength(1);
+    const sized = JSON.parse(String(fetcher.mock.calls.find(([url]) => String(url).endsWith("/apply-template"))?.[1]?.body));
+    expect(sized.reasoning_effort).toBe("medium");
     expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([
       "http://127.0.0.1:3321/apply-template", "http://127.0.0.1:3321/tokenize",
       "http://127.0.0.1:3321/v1/chat/completions",

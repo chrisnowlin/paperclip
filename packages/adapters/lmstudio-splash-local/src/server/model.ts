@@ -14,6 +14,7 @@ const MAX_CONTENT_CHARS = 65_536;
 // Match the coding loop's total run cap: Splash can emit more than four
 // parallel calls in one completed response, indexed from zero.
 const MAX_TOOL_CALLS = 48;
+const SPLASH_REASONING_EFFORT = "medium";
 const MAX_STREAM_BYTES = 64_000_000;
 const MAX_STREAM_FRAME_CHARS = 131_072;
 // Splash's non-streaming Chat response can take longer than Node fetch's
@@ -213,6 +214,7 @@ export async function completeLmStudioTurn(input: {
     tools: input.tools,
     tool_choice: "auto",
     temperature: 0,
+    reasoning_effort: SPLASH_REASONING_EFFORT,
     stream: false,
   });
   if (Buffer.byteLength(sizingBody) > MAX_REQUEST_BYTES) throw new Error("Splash request exceeds the size limit.");
@@ -248,6 +250,7 @@ export async function completeLmStudioTurn(input: {
     tools: input.tools,
     tool_choice: "auto",
     temperature: 0,
+    reasoning_effort: SPLASH_REASONING_EFFORT,
     max_tokens: maxOutputTokens,
     stream: input.stream === true,
     ...(input.stream ? { stream_options: { include_usage: true } } : {}),
