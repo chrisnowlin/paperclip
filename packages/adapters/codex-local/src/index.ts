@@ -50,6 +50,10 @@ const CODEX_LOCAL_ASTRA_REASONING_EFFORTS = [
   "ultra",
 ] as const;
 
+const CODEX_LOCAL_LUNA_REASONING_EFFORTS = [
+  "low", "medium", "high", "xhigh", "max",
+] as const;
+
 export type CodexLocalReasoningEffort =
   | (typeof CODEX_LOCAL_DEFAULT_REASONING_EFFORTS)[number]
   | (typeof CODEX_LOCAL_ASTRA_REASONING_EFFORTS)[number];
@@ -62,9 +66,10 @@ export function normalizeCodexModel(model: string | null | undefined): string {
 export function codexLocalReasoningEffortsForModel(
   model: string | null | undefined,
 ): readonly CodexLocalReasoningEffort[] {
-  return normalizeCodexModel(model) === "gpt-6-astra"
-    ? CODEX_LOCAL_ASTRA_REASONING_EFFORTS
-    : CODEX_LOCAL_DEFAULT_REASONING_EFFORTS;
+  const normalized = normalizeCodexModel(model);
+  return normalized === "gpt-6-astra" ? CODEX_LOCAL_ASTRA_REASONING_EFFORTS
+    : normalized === "gpt-6-luna" ? CODEX_LOCAL_LUNA_REASONING_EFFORTS
+      : CODEX_LOCAL_DEFAULT_REASONING_EFFORTS;
 }
 
 export function isCodexLocalKnownModel(model: string | null | undefined): boolean {
@@ -94,6 +99,7 @@ export const models = [
   // DEFAULT_CODEX_LOCAL_MODEL is gpt-5.6-sol, so it doubles as the first (default) 5.6 entry.
   { id: DEFAULT_CODEX_LOCAL_MODEL, label: DEFAULT_CODEX_LOCAL_MODEL },
   { id: "gpt-6-astra", label: "gpt-6-astra" },
+  { id: "gpt-6-luna", label: "gpt-6-luna" },
   { id: "gpt-5.6-terra", label: "gpt-5.6-terra" },
   { id: "gpt-5.6-luna", label: "gpt-5.6-luna" },
   { id: "gpt-5.4", label: "gpt-5.4" },
@@ -116,7 +122,7 @@ Core fields:
 - cwd (string, optional): default absolute working directory fallback for the agent process (created if missing when possible)
 - instructionsFilePath (string, optional): absolute path to a markdown instructions file prepended to stdin prompt at runtime
 - model (string, optional): Codex model id
-- modelReasoningEffort (string, optional): reasoning effort override passed via -c model_reasoning_effort=...; GPT-6 Astra supports low|medium|high|xhigh|max|ultra
+- modelReasoningEffort (string, optional): reasoning effort override passed via -c model_reasoning_effort=...; GPT-6 Astra supports low|medium|high|xhigh|max|ultra and GPT-6 Luna supports low|medium|high|xhigh|max
 - promptTemplate (string, optional): run prompt template
 - search (boolean, optional): run codex with --search
 - fastMode (boolean, optional): enable Codex Fast mode; supported on GPT-6 Astra, GPT-5.6 (sol/terra/luna), GPT-5.5, GPT-5.4 and passed through for manual model IDs
