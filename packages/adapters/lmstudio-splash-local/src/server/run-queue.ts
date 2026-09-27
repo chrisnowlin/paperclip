@@ -18,6 +18,8 @@ export class SplashRunQueue {
 
   constructor(private readonly maxWaiting = 3) {}
 
+  hasActiveWork(): boolean { return this.active || this.waiting.length > 0; }
+
   acquire(signal?: AbortSignal, onQueued?: (position: number) => void): Promise<() => void> {
     if (signal?.aborted) return Promise.reject(waitStopped(signal));
     if (!this.active) {

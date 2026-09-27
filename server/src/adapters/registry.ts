@@ -120,6 +120,7 @@ import {
   agentConfigurationDoc as lmStudioSplashAgentConfigurationDoc,
   models as lmStudioSplashModels,
 } from "@paperclipai/adapter-lmstudio-splash-local";
+import { appOwnedSplashRuntime } from "../services/splash-runtime.js";
 import {
   execute as openclawGatewayExecute,
   testEnvironment as openclawGatewayTestEnvironment,
@@ -831,8 +832,21 @@ const openCodeLocalAdapter: ServerAdapterModule = {
 const lmStudioSplashLocalAdapter: ServerAdapterModule = {
   type: "lmstudio_splash_local",
   runtimeToolDelivery: "invocation_context",
-  execute: lmStudioSplashExecute,
-  testEnvironment: lmStudioSplashTestEnvironment,
+  execute: async (ctx) => {
+    await appOwnedSplashRuntime.requireReady();
+    return lmStudioSplashExecute(ctx);
+  },
+  testEnvironment: async (ctx) => {
+    try { await appOwnedSplashRuntime.requireReady(); }
+    catch (error) {
+      return { adapterType: ctx.adapterType, status: "fail", testedAt: new Date().toISOString(), checks: [{
+        code: "splash_not_started", level: "error",
+        message: error instanceof Error ? error.message : "Start bundled Splash in Paperclip.",
+        hint: "Use Start Splash in the agent settings before assigning work.",
+      }] };
+    }
+    return lmStudioSplashTestEnvironment(ctx);
+  },
   getConfigSchema: getLmStudioSplashConfigSchema,
   models: lmStudioSplashModels,
   supportsLocalAgentJwt: true,

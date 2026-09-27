@@ -16,7 +16,16 @@ async function workspace() {
   await writeFile(path.join(root, "README.md"), "Project brief\n");
   return root;
 }
-const models = { models: [{ key: "qwen3.8-27b-splash", format: "splash", loaded_instances: [{ id: "loaded-1" }] }] };
+function splashReadiness(url: string): Response | null {
+  if (url.endsWith("/ready")) return new Response(JSON.stringify({ status: "ready" }));
+  if (url.endsWith("/status")) return new Response(JSON.stringify({ instance: {
+    model: "incoai/Qwen3.8-27B-Splash", host: "127.0.0.1", port: 3321,
+  } }));
+  if (url.endsWith("/v1/models")) return new Response(JSON.stringify({ data: [{
+    id: "qwen3.8-27b-splash", root: "incoai/Qwen3.8-27B-Splash", owned_by: "splash",
+  }] }));
+  return null;
+}
 const toolTurn = { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", content: null, tool_calls: [{
   id: "call-read", type: "function", function: { name: "read_file", arguments: '{"path":"README.md"}' },
 }] } }], usage: { prompt_tokens: 10, completion_tokens: 3 } };
@@ -42,7 +51,8 @@ describe("direct LM Studio Splash heartbeat", () => {
     let modelProbes = 0;
     let completions = 0;
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-      if (url.endsWith("/api/v1/models")) { modelProbes += 1; return new Response(JSON.stringify(models)); }
+      const readiness = splashReadiness(url);
+      if (readiness) { if (url.endsWith("/v1/models")) modelProbes += 1; return readiness; }
       completions += 1;
       if (completions === 1) { startedFirst(); await firstTurnHeld; }
       return new Response(JSON.stringify(finalTurn));
@@ -87,7 +97,8 @@ describe("direct LM Studio Splash heartbeat", () => {
     const requests: Array<{ url: string; body?: unknown }> = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
       requests.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
-      if (url.endsWith("/api/v1/models")) return new Response(JSON.stringify(models), { status: 200 });
+      const readiness = splashReadiness(url);
+      if (readiness) return readiness;
       if (url.endsWith("/v1/chat/completions")) return new Response(JSON.stringify(requests.filter((item) => item.url.endsWith("/v1/chat/completions")).length === 1 ? toolTurn : finalTurn), { status: 200 });
       throw new Error("Unexpected URL");
     }));
@@ -101,7 +112,7 @@ describe("direct LM Studio Splash heartbeat", () => {
     expect(result).toMatchObject({ exitCode: 0, model: "qwen3.8-27b-splash", costUsd: 0,
       sessionId: null, clearSession: true, summary: "Delegated task acknowledged.",
       usage: { inputTokens: 24, outputTokens: 8 } });
-    expect(requests.filter((item) => item.url.endsWith("/api/v1/models"))).toHaveLength(2);
+    expect(requests.filter((item) => item.url.endsWith("/v1/models"))).toHaveLength(2);
     const turns = requests.filter((item) => item.url.endsWith("/v1/chat/completions"));
     expect(turns).toHaveLength(2);
     expect(JSON.stringify(turns[0]?.body)).toContain("Implement delegated task");
@@ -112,14 +123,14 @@ describe("direct LM Studio Splash heartbeat", () => {
 
   it("does not start inference for an unloaded model or an existing paid binding", async () => {
     const root = await workspace();
-    const fetcher = vi.fn(async () => new Response(JSON.stringify({ models: [{ ...models.models[0], loaded_instances: [] }] }), { status: 200 }));
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ status: "unavailable" }), { status: 503 }));
     vi.stubGlobal("fetch", fetcher);
     const base = {
       runId: "run-2", agent: { id: "agent-1", companyId: "company-1", name: "Local", adapterType: "lmstudio_splash_local", adapterConfig: {} },
       runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
       context: context(root), authToken: "run-token", onLog: async () => {},
     };
-    await expect(execute({ ...base, config: { cwd: root } })).rejects.toThrow("not loaded");
+    await expect(execute({ ...base, config: { cwd: root } })).rejects.toThrow("readiness failed");
     expect(fetcher).toHaveBeenCalledOnce();
     await expect(execute({ ...base, config: { cwd: root, managedAiConnection: true } })).rejects.toThrow("AI Connection");
     expect(fetcher).toHaveBeenCalledOnce();
@@ -129,7 +140,8 @@ describe("direct LM Studio Splash heartbeat", () => {
     const root = await workspace();
     const requests: unknown[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
-      if (url.endsWith("/api/v1/models")) return new Response(JSON.stringify(models), { status: 200 });
+      const readiness = splashReadiness(url);
+      if (readiness) return readiness;
       requests.push(JSON.parse(String(init?.body)));
       return new Response(JSON.stringify(finalTurn), { status: 200 });
     }));
@@ -150,7 +162,7 @@ describe("direct LM Studio Splash heartbeat", () => {
     const root = await workspace();
     const cancelled = new AbortController();
     cancelled.abort();
-    const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith("/api/v1/models") ? models : toolTurn), { status: 200 }));
+    const fetcher = vi.fn(async (url: string) => splashReadiness(url) ?? new Response(JSON.stringify(toolTurn), { status: 200 }));
     vi.stubGlobal("fetch", fetcher);
     const base = {
       runId: "run-3", agent: { id: "agent-1", companyId: "company-1", name: "Local", adapterType: "lmstudio_splash_local", adapterConfig: {} },
@@ -170,7 +182,7 @@ describe("direct LM Studio Splash heartbeat", () => {
         command: "node", args: ["-e", "setTimeout(()=>{},1000)"], timeoutMs: 30,
       }) },
     }] } }] };
-    const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith("/api/v1/models") ? models : commandTurn), { status: 200 }));
+    const fetcher = vi.fn(async (url: string) => splashReadiness(url) ?? new Response(JSON.stringify(commandTurn), { status: 200 }));
     vi.stubGlobal("fetch", fetcher);
     await expect(execute({
       runId: "run-4", agent: { id: "agent-1", companyId: "company-1", name: "Local", adapterType: "lmstudio_splash_local", adapterConfig: {} },

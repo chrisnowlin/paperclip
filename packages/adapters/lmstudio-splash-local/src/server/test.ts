@@ -6,7 +6,7 @@ export async function testEnvironment(ctx: AdapterEnvironmentTestContext): Promi
   const testedAt = new Date().toISOString();
   try {
     assertLmStudioSplashConfig(ctx.config);
-    if (ctx.executionTarget?.kind === "remote") throw new Error("LM Studio Splash is local-only.");
+    if (ctx.executionTarget?.kind === "remote") throw new Error("App-managed Splash is local-only.");
   } catch (error) {
     return { adapterType: ctx.adapterType, status: "fail", testedAt, checks: [{
       code: "lmstudio_splash_config_invalid", level: "error", message: error instanceof Error ? error.message : "Invalid local model route.",
@@ -15,12 +15,12 @@ export async function testEnvironment(ctx: AdapterEnvironmentTestContext): Promi
   try {
     await probeLmStudioSplash();
     return { adapterType: ctx.adapterType, status: "pass", testedAt, checks: [{
-      code: "lmstudio_splash_ready", level: "info", message: "The exact Splash-format model is loaded in LM Studio.",
+      code: "lmstudio_splash_ready", level: "info", message: "Paperclip's bundled Splash server is ready with the exact Qwen model.",
     }] };
   } catch (error) {
     return { adapterType: ctx.adapterType, status: "fail", testedAt, checks: [{
-      code: "lmstudio_splash_unavailable", level: "error", message: error instanceof Error ? error.message : "LM Studio Splash is unavailable.",
-      hint: "Load qwen3.8-27b-splash in LM Studio before assigning work.",
+      code: "lmstudio_splash_unavailable", level: "error", message: error instanceof Error ? error.message : "App-managed Splash is unavailable.",
+      hint: "Use Start Splash in Paperclip before assigning work.",
     }] };
   }
 }

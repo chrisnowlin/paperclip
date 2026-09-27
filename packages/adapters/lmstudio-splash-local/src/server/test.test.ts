@@ -1,16 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import { testEnvironment } from "./test.js";
 
-describe("LM Studio Splash setup readiness", () => {
+describe("app-owned Splash setup readiness", () => {
   it("reports a loaded exact Splash model without inference", async () => {
-    const fetcher = vi.fn(async () => new Response(JSON.stringify({ models: [{
-      key: "qwen3.8-27b-splash", format: "splash", loaded_instances: [{ id: "loaded-1" }],
-    }] }), { status: 200 }));
+    const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(
+      url.endsWith("/ready") ? { status: "ready" }
+        : url.endsWith("/status") ? { instance: { model: "incoai/Qwen3.8-27B-Splash", host: "127.0.0.1", port: 3321 } }
+          : { data: [{ id: "qwen3.8-27b-splash", root: "incoai/Qwen3.8-27B-Splash", owned_by: "splash" }] },
+    ), { status: 200 }));
     vi.stubGlobal("fetch", fetcher);
     try {
       const result = await testEnvironment({ companyId: "company-1", adapterType: "lmstudio_splash_local", config: {} });
       expect(result).toMatchObject({ status: "pass", checks: [{ code: "lmstudio_splash_ready", level: "info" }] });
-      expect(fetcher).toHaveBeenCalledOnce();
+      expect(fetcher).toHaveBeenCalledTimes(3);
     } finally { vi.unstubAllGlobals(); }
   });
 

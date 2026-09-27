@@ -1,7 +1,9 @@
-import { LMSTUDIO_SPLASH_MODEL } from "../index.js";
+import { LMSTUDIO_SPLASH_MODEL, SPLASH_PACKAGE_ID } from "../index.js";
 export { LMSTUDIO_SPLASH_MODEL };
-const MODELS_URL = "http://127.0.0.1:1234/api/v1/models";
-const COMPLETIONS_URL = "http://127.0.0.1:1234/v1/chat/completions";
+const READY_URL = "http://127.0.0.1:3321/ready";
+const STATUS_URL = "http://127.0.0.1:3321/status";
+const MODELS_URL = "http://127.0.0.1:3321/v1/models";
+const COMPLETIONS_URL = "http://127.0.0.1:3321/v1/chat/completions";
 const MAX_RESPONSE_BYTES = 1_048_576;
 const MAX_REQUEST_BYTES = 524_288;
 const MAX_CONTENT_CHARS = 65_536;
@@ -30,7 +32,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 async function readBoundedJson(response: Response): Promise<unknown> {
-  if (!response.body) throw new Error("LM Studio returned an empty response.");
+  if (!response.body) throw new Error("Splash returned an empty response.");
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -41,7 +43,7 @@ async function readBoundedJson(response: Response): Promise<unknown> {
       size += value.byteLength;
       if (size > MAX_RESPONSE_BYTES) {
         await reader.cancel();
-        throw new Error("LM Studio response exceeds the size limit.");
+        throw new Error("Splash response exceeds the size limit.");
       }
       chunks.push(value);
     }
@@ -51,7 +53,7 @@ async function readBoundedJson(response: Response): Promise<unknown> {
   try {
     return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
   } catch {
-    throw new Error("LM Studio returned malformed JSON.");
+    throw new Error("Splash returned malformed JSON.");
   }
 }
 
@@ -61,23 +63,25 @@ function requestSignal(signal: AbortSignal | undefined, timeoutMs: number): Abor
 }
 
 export async function probeLmStudioSplash(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<{ modelId: string }> {
-  let response: Response;
-  try {
-    response = await fetcher(MODELS_URL, { method: "GET", redirect: "error", signal: requestSignal(signal, 2_000) });
-  } catch {
-    throw new Error("LM Studio is unavailable at 127.0.0.1:1234.");
+  const get = async (url: string) => {
+    let response: Response;
+    try { response = await fetcher(url, { method: "GET", redirect: "error", signal: requestSignal(signal, 2_000) }); }
+    catch { throw new Error("The app-owned Splash server is unavailable at 127.0.0.1:3321."); }
+    if (!response.ok) throw new Error(`Splash readiness failed with HTTP ${response.status}.`);
+    return readBoundedJson(response);
+  };
+  const readiness = await get(READY_URL);
+  if (!isRecord(readiness) || readiness.status !== "ready") throw new Error("The app-owned Splash server is not ready.");
+  const status = await get(STATUS_URL);
+  const instance = isRecord(status) ? status.instance : null;
+  if (!isRecord(instance) || instance.model !== SPLASH_PACKAGE_ID || instance.host !== "127.0.0.1" || instance.port !== 3321) {
+    throw new Error("The listener is not the app-owned Splash model.");
   }
-  if (!response.ok) throw new Error(`LM Studio readiness failed with HTTP ${response.status}.`);
-  const body = await readBoundedJson(response);
-  const models = isRecord(body) && Array.isArray(body.models) ? body.models : null;
-  if (!models) throw new Error("LM Studio model inventory is malformed.");
-  const selected = models.find((entry: unknown) => isRecord(entry) && entry.key === LMSTUDIO_SPLASH_MODEL);
-  if (!selected) throw new Error("The exact Splash model is not available in LM Studio.");
-  if (!isRecord(selected) || selected.format !== "splash") {
-    throw new Error("The selected LM Studio model is not in Splash format.");
-  }
-  if (!Array.isArray(selected.loaded_instances) || selected.loaded_instances.length === 0) {
-    throw new Error("The Splash model is not loaded in LM Studio. Load it explicitly before assigning work.");
+  const catalog = await get(MODELS_URL);
+  const models = isRecord(catalog) && Array.isArray(catalog.data) ? catalog.data : null;
+  if (!models?.some((entry: unknown) => isRecord(entry) && entry.id === LMSTUDIO_SPLASH_MODEL &&
+      entry.root === SPLASH_PACKAGE_ID && entry.owned_by === "splash")) {
+    throw new Error("The listener is not the app-owned Splash model.");
   }
   return { modelId: LMSTUDIO_SPLASH_MODEL };
 }
@@ -97,7 +101,7 @@ export async function completeLmStudioTurn(input: {
     max_tokens: 2_048,
     stream: false,
   });
-  if (Buffer.byteLength(payload) > MAX_REQUEST_BYTES) throw new Error("LM Studio request exceeds the size limit.");
+  if (Buffer.byteLength(payload) > MAX_REQUEST_BYTES) throw new Error("Splash request exceeds the size limit.");
   let response: Response;
   try {
     response = await (input.fetcher ?? fetch)(COMPLETIONS_URL, {
@@ -108,19 +112,19 @@ export async function completeLmStudioTurn(input: {
       signal: requestSignal(input.signal, 120_000),
     });
   } catch {
-    throw new Error("LM Studio inference is unavailable or timed out; no alternate provider was tried.");
+    throw new Error("App-owned Splash inference is unavailable or timed out; no alternate provider was tried.");
   }
-  if (!response.ok) throw new Error(`LM Studio inference failed with HTTP ${response.status}; no alternate provider was tried.`);
+  if (!response.ok) throw new Error(`Splash inference failed with HTTP ${response.status}; no alternate provider was tried.`);
   const body = await readBoundedJson(response);
   const choice = isRecord(body) && Array.isArray(body.choices) ? body.choices[0] : null;
   const message = isRecord(choice) ? choice.message : null;
-  if (!isRecord(message)) throw new Error("LM Studio completion is malformed.");
+  if (!isRecord(message)) throw new Error("Splash completion is malformed.");
   const content = message.content === null || message.content === undefined ? null : message.content;
   if (content !== null && (typeof content !== "string" || content.length > MAX_CONTENT_CHARS)) {
-    throw new Error("LM Studio completion content is invalid.");
+    throw new Error("Splash completion content is invalid.");
   }
   const rawCalls = message.tool_calls === undefined ? [] : message.tool_calls;
-  if (!Array.isArray(rawCalls) || rawCalls.length > MAX_TOOL_CALLS) throw new Error("LM Studio tool call count is invalid.");
+  if (!Array.isArray(rawCalls) || rawCalls.length > MAX_TOOL_CALLS) throw new Error("Splash tool call count is invalid.");
   const ids = new Set<string>();
   const toolCalls = rawCalls.map((entry: unknown): LmStudioToolCall => {
     const fn = isRecord(entry) ? entry.function : null;
@@ -128,19 +132,19 @@ export async function completeLmStudioTurn(input: {
         entry.type !== "function" || !isRecord(fn) || typeof fn.name !== "string" ||
         !/^[a-z][a-z0-9_]*$/.test(fn.name) || typeof fn.arguments !== "string" ||
         fn.arguments.length > 65_536 || ids.has(entry.id)) {
-      throw new Error("LM Studio tool call is malformed.");
+      throw new Error("Splash tool call is malformed.");
     }
     ids.add(entry.id);
     let args: unknown;
-    try { args = JSON.parse(fn.arguments); } catch { throw new Error("LM Studio tool call arguments are malformed."); }
-    if (!isRecord(args)) throw new Error("LM Studio tool call arguments must be an object.");
+    try { args = JSON.parse(fn.arguments); } catch { throw new Error("Splash tool call arguments are malformed."); }
+    if (!isRecord(args)) throw new Error("Splash tool call arguments must be an object.");
     return { id: entry.id, name: fn.name, arguments: args };
   });
   if (toolCalls.length === 0) {
-    if (isRecord(choice) && choice.finish_reason !== "stop") throw new Error("LM Studio returned an unfinished answer.");
-    if (typeof content !== "string" || !content.trim()) throw new Error("LM Studio completion has no content.");
+    if (isRecord(choice) && choice.finish_reason !== "stop") throw new Error("Splash returned an unfinished answer.");
+    if (typeof content !== "string" || !content.trim()) throw new Error("Splash completion has no content.");
   } else if (isRecord(choice) && choice.finish_reason !== "tool_calls") {
-    throw new Error("LM Studio returned an unfinished tool call.");
+    throw new Error("Splash returned an unfinished tool call.");
   }
   const rawUsage = isRecord(body) && isRecord(body.usage) ? body.usage : {};
   const tokenCount = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;

@@ -2,21 +2,23 @@ import Foundation
 
 enum LmStudioSplashReadiness {
     static let model = "qwen3.8-27b-splash"
+    static let package = "incoai/Qwen3.8-27B-Splash"
 
     enum Status: Equatable {
-        case loaded, unloaded, missing, wrongFormat, unavailable
+        case loaded, wrongModel, unavailable
     }
 
     static func status(_ data: Data) -> Status {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let models = object["models"] as? [[String: Any]] else { return .unavailable }
-        guard let selected = models.first(where: { $0["key"] as? String == model }) else { return .missing }
-        guard selected["format"] as? String == "splash" else { return .wrongFormat }
-        return ((selected["loaded_instances"] as? [Any])?.isEmpty == false) ? .loaded : .unloaded
+              let instance = object["instance"] as? [String: Any] else { return .unavailable }
+        guard instance["model"] as? String == package,
+              instance["host"] as? String == "127.0.0.1",
+              instance["port"] as? Int == 3321 else { return .wrongModel }
+        return .loaded
     }
 
     static func check() async -> Status {
-        guard let url = URL(string: "http://127.0.0.1:1234/api/v1/models") else { return .unavailable }
+        guard let url = URL(string: "http://127.0.0.1:3321/status") else { return .unavailable }
         var request = URLRequest(url: url)
         request.timeoutInterval = 2
         do {

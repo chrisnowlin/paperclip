@@ -1,32 +1,36 @@
 import { describe, expect, it, vi } from "vitest";
 import { completeLmStudioTurn, probeLmStudioSplash } from "./model.js";
 
-const model = { key: "qwen3.8-27b-splash", format: "splash", loaded_instances: [{ id: "loaded-1" }] };
+const packageId = "incoai/Qwen3.8-27B-Splash";
+const model = { id: "qwen3.8-27b-splash", root: packageId, owned_by: "splash" };
+const status = { instance: { model: packageId, host: "127.0.0.1", port: 3321 } };
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+const splashFetcher = (modelEntry: unknown = model, instance: unknown = status.instance) =>
+  vi.fn<typeof fetch>(async (url) => response(String(url).endsWith("/ready") ? { status: "ready" }
+    : String(url).endsWith("/status") ? { instance } : { data: [modelEntry] }));
 
 describe("LM Studio Splash model route", () => {
-  it("accepts only the exact loaded Splash-format model", async () => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response({ models: [model] }));
+  it("accepts only the app-owned Splash alias and package", async () => {
+    const fetcher = splashFetcher();
     await expect(probeLmStudioSplash(fetcher)).resolves.toEqual({ modelId: "qwen3.8-27b-splash" });
-    expect(fetcher).toHaveBeenCalledOnce();
-    expect(fetcher).toHaveBeenCalledWith("http://127.0.0.1:1234/api/v1/models", expect.objectContaining({
-      method: "GET", redirect: "error",
-    }));
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      "http://127.0.0.1:3321/ready", "http://127.0.0.1:3321/status", "http://127.0.0.1:3321/v1/models",
+    ]);
   });
 
   it.each([
-    [{ ...model, loaded_instances: [] }, "not loaded"],
-    [{ ...model, format: "gguf" }, "Splash format"],
-    [{ ...model, key: "another-model" }, "not available"],
-  ] as const)("rejects an unavailable model without requesting an alternate route", async (entry, reason) => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response({ models: [entry] }));
+    [{ ...model, owned_by: "other" }, "not the app-owned Splash"],
+    [{ ...model, root: "other/model" }, "not the app-owned Splash"],
+    [{ ...model, id: "another-model" }, "not the app-owned Splash"],
+  ] as const)("rejects an impostor model without requesting an alternate route", async (entry, reason) => {
+    const fetcher = splashFetcher(entry);
     await expect(probeLmStudioSplash(fetcher)).rejects.toThrow(reason);
-    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
-  it("fails closed when LM Studio is unreachable", async () => {
+  it("fails closed when the app-owned Splash server is unreachable", async () => {
     const fetcher = vi.fn<typeof fetch>().mockRejectedValue(new Error("connection refused"));
-    await expect(probeLmStudioSplash(fetcher)).rejects.toThrow("LM Studio");
+    await expect(probeLmStudioSplash(fetcher)).rejects.toThrow("Splash");
     expect(fetcher).toHaveBeenCalledOnce();
   });
 
@@ -44,7 +48,7 @@ describe("LM Studio Splash model route", () => {
     });
     expect(result).toEqual({ content: null, toolCalls: [{ id: "call-1", name: "read_file", arguments: { path: "README.md" } }],
       usage: { inputTokens: 12, outputTokens: 4 } });
-    expect(fetcher).toHaveBeenCalledWith("http://127.0.0.1:1234/v1/chat/completions", expect.objectContaining({
+    expect(fetcher).toHaveBeenCalledWith("http://127.0.0.1:3321/v1/chat/completions", expect.objectContaining({
       method: "POST", redirect: "error",
     }));
     const sent = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body));

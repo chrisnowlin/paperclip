@@ -50,6 +50,7 @@ import { summarySlotRoutes } from "./routes/summary-slots.js";
 import { statusCardRoutes } from "./routes/status-cards.js";
 import { teamsCatalogRoutes } from "./routes/teams-catalog.js";
 import { agentRoutes } from "./routes/agents.js";
+import { appOwnedSplashRuntime } from "./services/splash-runtime.js";
 import type { SetupTokenSessionService } from "./services/setup-token-session.js";
 import {
   buildSetupTokenLoginTransport,
@@ -1318,6 +1319,7 @@ export async function createApp(
       // caller stops the database and the provider. A lease release that
       // fails stays a durable record for the startup reaper.
       await setupTokenLoginService?.shutdown();
+      await appOwnedSplashRuntime.shutdown();
     })();
     return appServicesShutdown;
   };
@@ -1327,6 +1329,7 @@ export async function createApp(
   // the best-effort cleanup and drops the returned promise. The orderly signal
   // path awaits `shutdownAppServices` in full before the process exits.
   process.once("exit", () => {
+    appOwnedSplashRuntime.terminateOnProcessExit();
     void shutdownAppServices();
   });
   process.once("beforeExit", () => {

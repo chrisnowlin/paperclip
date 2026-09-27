@@ -3,3 +3,4 @@ export { createLmStudioToolExecutor, LMSTUDIO_TOOL_DEFINITIONS } from "./tools.j
 export { execute } from "./execute.js";
 export { testEnvironment } from "./test.js";
 export { getConfigSchema } from "./schema.js";
+export { splashRunQueue } from "./run-queue.js";

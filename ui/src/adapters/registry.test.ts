@@ -22,7 +22,7 @@ const externalUIAdapter: UIAdapterModule = {
 describe("ui adapter registry", () => {
   it("registers the direct local Splash adapter with a fixed model", () => {
     const adapter = getUIAdapter("lmstudio_splash_local");
-    expect(adapter.label).toContain("LM Studio Splash");
+    expect(adapter.label).toContain("Splash (app-managed)");
     expect(adapter.buildAdapterConfig({ model: "openai/gpt-5", cwd: "/tmp/work", adapterSchemaValues: { maxSteps: 6 } } as never))
       .toEqual({ model: "qwen3.8-27b-splash", cwd: "/tmp/work", maxSteps: 6 });
   });

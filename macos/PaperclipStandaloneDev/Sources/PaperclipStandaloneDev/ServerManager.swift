@@ -121,6 +121,8 @@ final class ServerManager {
         ] + nvmBins + ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
         env["PATH"] = (searchPaths + [env["PATH"] ?? ""]).joined(separator: ":")
         env["PORT"] = String(port)
+        let splash = Bundle.main.resourceURL!.appendingPathComponent("splash", isDirectory: true)
+        env["PAPERCLIP_SPLASH_RUNTIME_ROOT"] = splash.path
         return env
     }
 

@@ -4,6 +4,7 @@ import { ADAPTER_AUTH_MISSING_CHECK_CODE, AI_CONNECTION_CAPABILITIES, aiConnecti
 import { toolConnections } from "@paperclipai/db";
 import { aiConnectionService } from "../services/ai-connections.js";
 import { defaultAiConnectionForHire } from "../services/agent-ai-connection-default.js";
+import { appOwnedSplashRuntime, SplashRuntimeError } from "../services/splash-runtime.js";
 import { assertAiConnectionCreateAccess, canInstallSharedAiConnectionForNewAgent, responsibleUserForAiRequest, validateAiApiKey } from "./ai-connections.js";
 import { isAiConnectionCompatible } from "@paperclipai/shared";
 import { applyConnectorSkills, resolveConnectorAssignments, annotateConnectorSkills, isConnectorSkill } from "../services/connector-runtime.js";
@@ -3343,6 +3344,50 @@ export function agentRoutes(
     }
     return selection.connection.id;
   }
+
+  const requireSplashRuntimeAdmin = (req: Request, companyId: string) => {
+    assertBoard(req);
+    assertInstanceAdmin(req);
+    assertCompanyAccess(req, companyId);
+  };
+  const throwSplashRuntimeError = (error: unknown): never => {
+    if (error instanceof SplashRuntimeError) {
+      const details = { code: error.code };
+      if (["splash_disk_low", "splash_run_active", "splash_starting"].includes(error.code)) {
+        throw conflict(error.message, details);
+      }
+      throw unprocessable(error.message, details);
+    }
+    throw error;
+  };
+
+  router.get("/companies/:companyId/adapters/lmstudio_splash_local/runtime", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    requireSplashRuntimeAdmin(req, companyId);
+    res.json(await appOwnedSplashRuntime.status());
+  });
+
+  router.post("/companies/:companyId/adapters/lmstudio_splash_local/runtime/start", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    requireSplashRuntimeAdmin(req, companyId);
+    const runtime = await appOwnedSplashRuntime.start().catch(throwSplashRuntimeError);
+    const actor = getActorInfo(req);
+    await logActivity(db, { companyId, actorType: actor.actorType, actorId: actor.actorId,
+      action: "splash_runtime.started", entityType: "company", entityId: companyId,
+      details: { model: runtime.model, port: runtime.port, state: runtime.state } });
+    res.json(runtime);
+  });
+
+  router.post("/companies/:companyId/adapters/lmstudio_splash_local/runtime/stop", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    requireSplashRuntimeAdmin(req, companyId);
+    const runtime = await appOwnedSplashRuntime.stop().catch(throwSplashRuntimeError);
+    const actor = getActorInfo(req);
+    await logActivity(db, { companyId, actorType: actor.actorType, actorId: actor.actorId,
+      action: "splash_runtime.stopped", entityType: "company", entityId: companyId,
+      details: { model: runtime.model, port: runtime.port, state: runtime.state } });
+    res.json(runtime);
+  });
 
   router.post(
     "/companies/:companyId/adapters/:type/test-environment",

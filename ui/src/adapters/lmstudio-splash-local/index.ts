@@ -4,7 +4,7 @@ import { buildLmStudioSplashConfig, parseLmStudioSplashStdoutLine } from "@paper
 
 export const lmStudioSplashLocalUIAdapter: UIAdapterModule = {
   type: "lmstudio_splash_local",
-  label: "LM Studio Splash (local)",
+  label: "Splash (app-managed)",
   parseStdoutLine: parseLmStudioSplashStdoutLine,
   ConfigFields: SchemaConfigFields,
   buildAdapterConfig: buildLmStudioSplashConfig,

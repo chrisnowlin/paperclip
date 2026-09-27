@@ -6,7 +6,7 @@ This is a local checkout of [paperclipai/paperclip](https://github.com/paperclip
 
 - The upstream Paperclip source is at the repository root (`server/`, `ui/`, `packages/`, `cli/`).
 - `macos/PaperclipStandaloneDev/` contains the SwiftPM macOS wrapper developed for the installed standalone app. It includes the menu bar controls, local agent setup, and the in-app OpenCode option in the new-organization wizard.
-- The local agent setup also offers **LM Studio Splash**. It calls the loaded `qwen3.8-27b-splash` model at `http://127.0.0.1:1234` through a Paperclip-owned tool loop; it does not use OpenCode or a Claude/OpenAI login. The model must already be loaded in LM Studio. A downloaded entry alone is insufficient.
+- The local agent setup also offers **Splash (app-managed)**. V2 bundles Splash 1.0.2 program files and starts its own `incoai/Qwen3.8-27B-Splash` server at `127.0.0.1:3321` when an instance admin presses **Start Splash** in agent settings. The existing Hugging Face model snapshot remains outside the app. The Paperclip-owned coding loop does not use OpenCode, LM Studio, or a Claude/OpenAI login.
 - `script/build_and_run.sh` builds `dist/Paperclip Standalone V2.app` and launches it. Each build uses `script/build_local_runtime.sh` to build and package the Paperclip CLI, server, UI, and required workspace packages from this checkout into the Git-ignored wrapper `runtime/` directory, then bundles Node.js 24.
 
 **V2** uses `http://127.0.0.1:3319`, embedded PostgreSQL port `54333`, and `~/Library/Application Support/Paperclip Standalone V2`. The V1 dev app uses port `3318`; the installed **Paperclip Standalone** app uses port `3317`. Their processes, bundles, and databases are separate.
@@ -17,7 +17,7 @@ Prerequisites: macOS 14+, Xcode command-line tools, and Node.js 24.11+ with npm 
 
 ```sh
 ./script/build_and_run.sh --build-only  # package without launching
-./script/build_and_run.sh               # stop, build, and launch the dev app
+./script/build_and_run.sh               # build and launch the dev app when V2 is stopped
 ```
 
 The wrapper alone can be compiled without downloading the Paperclip runtime:
@@ -36,15 +36,15 @@ V2 packages local source. Edits to `ui/`, `server/`, and their workspace depende
 
 In V2, open a project's **Configuration** tab to choose an active owner agent and a different active reviewer agent. The project needs a local Git-backed primary workspace and isolated workspaces enabled in instance settings. The reviewer must have an active sandbox environment selected as its default; configure a sandbox provider and that agent's environment before saving. Saving the pod only records configuration.
 
-The LM Studio Splash agent can be the local-trusted owner. It has Paperclip-owned file, command, and company-scoped task tools; commands run with the current macOS user's authority. It cannot be the sandbox reviewer. A Splash-owned task requires the reviewer to have an explicit AI Connection binding before attachment; choose the intended named account on that reviewer agent first. Attachment records the selected local route and reviewer connection IDs in the task activity log. A responsible-user default is resolved for each run and is not a fixed account at attachment time.
+The Splash agent can be the local-trusted owner. It has Paperclip-owned file, command, and company-scoped task tools; commands run with the current macOS user's authority. It cannot be the sandbox reviewer. A Splash-owned task requires the reviewer to have an explicit AI Connection binding before attachment; choose the intended named account on that reviewer agent first. Attachment records the selected local route and reviewer connection IDs in the task activity log. A responsible-user default is resolved for each run and is not a fixed account at attachment time.
 
-Only one Splash agent run executes at a time in the V2 server. Three more may wait FIFO for up to ten minutes; a full queue fails visibly, and Stop removes a waiter. The slot covers the entire coding/tool run. Other LM Studio clients are outside Paperclip's queue.
+Only one Splash agent run executes at a time in the V2 server. Three more may wait FIFO for up to ten minutes; a full queue fails visibly, and Stop removes a waiter. The slot covers the entire coding/tool run. Stop Splash refuses while work is active, and Start Splash refuses when another local LLM is loaded or port `3321` is occupied.
 
 On a parked backlog task in that project, choose **Attach coding pod**. Attachment pins the owner, reviewer, and board approver to that task and leaves it parked. Start the owner through the normal Paperclip workflow when ready. A clean committed owner worktree becomes an exact Git candidate before reviewer dispatch. The reviewer uses a separate worktree pinned to that commit and a restricted read/test policy. The task cockpit links the candidate comparison through GitHub when available or a bounded local diff otherwise, plus the workspaces, plan, work products, run ledger, and stage comments. Board approval requires a written decision and the candidate must still match the source worktree. If it moved or became dirty, return the task to the owner for a new clean candidate.
 
 V2's initial project and task data are separate from the V1 app. Do not launch live agents during build or smoke verification; a live coding-pod qualification needs a separate explicit request.
 
-See [the direct Splash design](doc/plans/2026-09-26-lmstudio-splash-direct-design.md) for the readiness contract and operator-assisted live qualification steps. The standalone Splash server on port `8000` is not used by this route.
+See [the app-owned Splash design](doc/plans/2026-09-26-app-owned-splash-design.md) for the readiness contract and live qualification steps. Starting requires at least 8 GiB free on the prepared-weight cache volume and 0.5 GiB for V2 metadata. Set `SPLASH_WEIGHT_CACHE` to an existing absolute directory before launching V2 to use another volume. No model weights are bundled or downloaded. The standalone Splash server on port `8000` is not used by this route.
 
 ## GitHub remotes and branches
 

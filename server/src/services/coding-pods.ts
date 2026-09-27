@@ -218,7 +218,7 @@ export function codingPodService(db: Db) {
         }
         if (role === "reviewer" && input.enabled) {
           if (agent.adapterType === "lmstudio_splash_local") {
-            throw unprocessable("The LM Studio Splash adapter is local-only and cannot review in a sandbox");
+            throw unprocessable("The app-managed Splash adapter is local-only and cannot review in a sandbox");
           }
           const [reviewEnvironment] = agent.defaultEnvironmentId
             ? await db.select({ driver: environments.driver, status: environments.status }).from(environments)

@@ -45,6 +45,14 @@ export interface AdapterModel {
   label: string;
 }
 
+export interface AppOwnedSplashRuntimeStatus {
+  state: "stopped" | "starting" | "ready";
+  model: string;
+  port: number;
+  pid: number | null;
+  lastError: string | null;
+}
+
 export interface DetectedAdapterModel {
   model: string;
   provider: string;
@@ -233,6 +241,12 @@ export const agentsApi = {
       `/companies/${companyId}/adapters/${type}/test-environment`,
       data,
     ),
+  splashRuntimeStatus: (companyId: string) =>
+    api.get<AppOwnedSplashRuntimeStatus>(`/companies/${encodeURIComponent(companyId)}/adapters/lmstudio_splash_local/runtime`),
+  startSplashRuntime: (companyId: string) =>
+    api.post<AppOwnedSplashRuntimeStatus>(`/companies/${encodeURIComponent(companyId)}/adapters/lmstudio_splash_local/runtime/start`, {}),
+  stopSplashRuntime: (companyId: string) =>
+    api.post<AppOwnedSplashRuntimeStatus>(`/companies/${encodeURIComponent(companyId)}/adapters/lmstudio_splash_local/runtime/stop`, {}),
   getAdapterAuthSignal: (companyId: string, type: string, environmentId?: string | null) => {
     const query = environmentId ? `?environmentId=${encodeURIComponent(environmentId)}` : "";
     return api.get<AdapterAuthSignalResponse>(

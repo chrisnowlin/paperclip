@@ -1076,6 +1076,26 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
       return agentsApi.testEnvironment(selectedCompanyId, adapterType, { adapterConfig, agentId, aiConnection, environmentId });
     },
   });
+  const splashRuntimeQueryKey = ["app-owned-splash-runtime", selectedCompanyId];
+  const splashRuntime = useQuery({
+    queryKey: splashRuntimeQueryKey,
+    queryFn: () => agentsApi.splashRuntimeStatus(selectedCompanyId!),
+    enabled: isDirectLmStudioSplash && Boolean(selectedCompanyId),
+    refetchInterval: 15_000,
+    retry: false,
+  });
+  const splashRuntimeControl = useMutation({
+    mutationFn: async (action: "start" | "stop") => {
+      if (!selectedCompanyId) throw new Error("Select an organization first.");
+      return action === "start"
+        ? agentsApi.startSplashRuntime(selectedCompanyId)
+        : agentsApi.stopSplashRuntime(selectedCompanyId);
+    },
+    onSuccess: () => {
+      testEnvironment.reset();
+      void queryClient.invalidateQueries({ queryKey: splashRuntimeQueryKey });
+    },
+  });
   const [testActionPending, setTestActionPending] = useState(false);
   const [testActionError, setTestActionError] = useState<string | null>(null);
   const testActionLabel = "Test";
@@ -1585,8 +1605,35 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
               {testActionPending ? `${testActionLabel}...` : testActionLabel}
             </Button>
           )}
+          {isDirectLmStudioSplash && selectedCompanyId && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 px-2.5 text-xs"
+              disabled={splashRuntimeControl.isPending || splashRuntime.data?.state === "starting"}
+              onClick={() => splashRuntimeControl.mutate(splashRuntime.data?.state === "ready" ? "stop" : "start")}
+            >
+              {splashRuntimeControl.isPending ? "Working..." : splashRuntime.data?.state === "ready" ? "Stop Splash" : "Start Splash"}
+            </Button>
+          )}
         </div>
         <div className={cn(cards ? "border border-border rounded-lg p-4 space-y-3" : "px-4 pb-3 space-y-3")}>
+          {isDirectLmStudioSplash && selectedCompanyId && (
+            <div className="text-xs text-muted-foreground" role="status">
+              {splashRuntimeControl.error instanceof Error
+                ? splashRuntimeControl.error.message
+                : splashRuntime.error instanceof Error
+                  ? splashRuntime.error.message
+                  : splashRuntime.data?.state === "ready"
+                    ? "Bundled Splash is ready for local tasks."
+                    : splashRuntime.data?.state === "starting"
+                      ? "Bundled Splash is starting."
+                      : splashRuntime.data?.lastError
+                        ? `${splashRuntime.data.lastError} Use Start Splash to retry.`
+                      : "Bundled Splash is stopped. Start it before assigning local tasks."}
+            </div>
+          )}
           {showAdapterTypeField && (
             <Field label="Adapter type" hint={help.adapterType}>
               <AdapterTypeDropdown

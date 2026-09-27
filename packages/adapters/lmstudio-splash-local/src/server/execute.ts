@@ -15,12 +15,12 @@ function record(value: unknown): Record<string, unknown> {
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const maxSteps = assertLmStudioSplashConfig(ctx.config);
-  if (ctx.executionTarget?.kind === "remote") throw new Error("LM Studio Splash cannot run on a remote execution target.");
-  if (!ctx.authToken) throw new Error("LM Studio Splash requires a run-scoped Paperclip credential for task tools.");
+  if (ctx.executionTarget?.kind === "remote") throw new Error("App-managed Splash cannot run on a remote execution target.");
+  if (!ctx.authToken) throw new Error("App-managed Splash requires a run-scoped Paperclip credential for task tools.");
   const workspace = record(ctx.context.paperclipWorkspace);
   const cwd = typeof workspace.cwd === "string" && workspace.cwd ? workspace.cwd : ctx.config.cwd;
-  if (typeof cwd !== "string" || !cwd) throw new Error("LM Studio Splash requires a selected local workspace.");
-  if (ctx.signal?.aborted) throw new Error("LM Studio Splash run was cancelled.");
+  if (typeof cwd !== "string" || !cwd) throw new Error("App-managed Splash requires a selected local workspace.");
+  if (ctx.signal?.aborted) throw new Error("App-managed Splash run was cancelled.");
   await ctx.onCancellationReady?.();
   const queueSignal = ctx.signal
     ? AbortSignal.any([ctx.signal, AbortSignal.timeout(MAX_QUEUE_WAIT_MS)])
@@ -45,8 +45,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const wake = renderPaperclipWakePrompt(ctx.context.paperclipWake);
     const task = selectPaperclipTaskMarkdown(ctx.context);
     const prompt = joinPromptSections([wake, task, typeof ctx.config.promptTemplate === "string" ? ctx.config.promptTemplate : ""]);
-    if (!prompt) throw new Error("LM Studio Splash received no task context.");
-    await ctx.onMeta?.({ adapterType: "lmstudio_splash_local", command: "LM Studio local API", cwd,
+    if (!prompt) throw new Error("App-managed Splash received no task context.");
+    await ctx.onMeta?.({ adapterType: "lmstudio_splash_local", command: "Bundled Splash local API", cwd,
       commandNotes: ["Fixed model and loopback endpoint; no provider session or paid account."], prompt });
     const messages: LmStudioMessage[] = [
       { role: "system", content: "You are a local Paperclip coding agent. Use the provided tools for workspace and task actions. Never request credentials or alternate model endpoints. Report completed work clearly." },
@@ -57,7 +57,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     let toolCallCount = 0;
     let dispatched = false;
     for (let step = 0; step < maxSteps; step += 1) {
-      if (runSignal.aborted) throw new Error("LM Studio Splash run was cancelled or timed out.");
+      if (runSignal.aborted) throw new Error("App-managed Splash run was cancelled or timed out.");
       await probeLmStudioSplash(fetch, runSignal);
       if (!dispatched) { ctx.onDispatch?.(); dispatched = true; }
       const turn = await completeLmStudioTurn({ messages, tools: executor.definitions, signal: runSignal });
@@ -66,7 +66,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       if (turn.toolCalls.length === 0) {
         const summary = turn.content ?? "";
         await ctx.onLog("stdout", `${JSON.stringify({ type: "assistant", text: summary })}\n`);
-        return { exitCode: 0, signal: null, timedOut: false, provider: "lmstudio", biller: "local",
+        return { exitCode: 0, signal: null, timedOut: false, provider: "splash", biller: "local",
           model: LMSTUDIO_SPLASH_MODEL, billingType: "fixed", costUsd: 0, usageBasis: "per_run",
           usage: { inputTokens, outputTokens }, sessionId: null, sessionParams: null,
           sessionDisplayId: null, clearSession: true, summary: summary.slice(0, 12_000),
@@ -77,7 +77,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           function: { name: call.name, arguments: JSON.stringify(call.arguments) } })) });
       for (const call of turn.toolCalls) {
         toolCallCount += 1;
-        if (toolCallCount > MAX_TOOL_CALLS) throw new Error("LM Studio Splash tool call limit reached.");
+        if (toolCallCount > MAX_TOOL_CALLS) throw new Error("App-managed Splash tool call limit reached.");
         await ctx.onLog("stdout", `${JSON.stringify({ type: "tool_call", name: call.name })}\n`);
         let result: string;
         let isError = false;
@@ -92,7 +92,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         await ctx.onLog("stdout", `${JSON.stringify({ type: "tool_result", name: call.name, isError })}\n`);
       }
     }
-    throw new Error("LM Studio Splash step limit reached before a final response.");
+    throw new Error("App-managed Splash step limit reached before a final response.");
   } finally {
     release();
   }

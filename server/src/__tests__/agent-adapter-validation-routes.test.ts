@@ -78,6 +78,20 @@ const mockRemoteAgentProfileService = vi.hoisted(() => ({
 }));
 
 const mockLogActivity = vi.hoisted(() => vi.fn());
+const mockSplashRuntime = vi.hoisted(() => ({
+  status: vi.fn(async () => ({ state: "stopped", model: "incoai/Qwen3.8-27B-Splash", port: 3321, pid: null, lastError: null })),
+  start: vi.fn(async () => ({ state: "ready", model: "incoai/Qwen3.8-27B-Splash", port: 3321, pid: 4812, lastError: null })),
+  stop: vi.fn(async () => ({ state: "stopped", model: "incoai/Qwen3.8-27B-Splash", port: 3321, pid: null, lastError: null })),
+  requireReady: vi.fn(async () => {}),
+  shutdown: vi.fn(async () => {}),
+}));
+
+vi.mock("../services/splash-runtime.js", () => ({
+  appOwnedSplashRuntime: mockSplashRuntime,
+  SplashRuntimeError: class SplashRuntimeError extends Error {
+    constructor(public readonly code: string, message: string) { super(message); }
+  },
+}));
 
 vi.mock("../services/index.js", () => ({
   agentService: () => mockAgentService,
@@ -113,6 +127,12 @@ vi.mock("../services/remote-agent-profiles.js", () => ({
 }));
 
 function registerModuleMocks() {
+  vi.doMock("../services/splash-runtime.js", () => ({
+    appOwnedSplashRuntime: mockSplashRuntime,
+    SplashRuntimeError: class SplashRuntimeError extends Error {
+      constructor(public readonly code: string, message: string) { super(message); }
+    },
+  }));
   vi.doMock("../services/index.js", () => ({
     agentService: () => mockAgentService,
     agentInstructionsService: () => mockAgentInstructionsService,
@@ -172,7 +192,7 @@ const externalAdapter: ServerAdapterModule = {
 
 const missingAdapterType = "missing_adapter_validation_test";
 
-async function createApp() {
+async function createApp(actorOverride: Record<string, unknown> = {}) {
   const [{ agentRoutes }, { errorHandler }] = await Promise.all([
     vi.importActual<typeof import("../routes/agents.js")>("../routes/agents.js"),
     vi.importActual<typeof import("../middleware/index.js")>("../middleware/index.js"),
@@ -186,6 +206,7 @@ async function createApp() {
       companyIds: ["company-1"],
       source: "local_implicit",
       isInstanceAdmin: false,
+      ...actorOverride,
     };
     next();
   });
@@ -335,6 +356,26 @@ describe("agent routes adapter validation", () => {
   afterEach(async () => {
     await unregisterTestAdapter("external_test");
     await unregisterTestAdapter(missingAdapterType);
+  });
+
+  it("limits bundled Splash start and stop to an instance-admin board actor and audits each action", async () => {
+    const denied = await createApp({ source: "session", isInstanceAdmin: false });
+    const deniedResponse = await requestApp(denied, (baseUrl) => request(baseUrl)
+      .post("/api/companies/company-1/adapters/lmstudio_splash_local/runtime/start").send({}));
+    expect(deniedResponse.status).toBe(403);
+    expect(mockSplashRuntime.start).not.toHaveBeenCalled();
+
+    const app = await createApp();
+    const started = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post("/api/companies/company-1/adapters/lmstudio_splash_local/runtime/start").send({}));
+    expect(started.status).toBe(200);
+    expect(started.body).toMatchObject({ state: "ready", model: "incoai/Qwen3.8-27B-Splash", port: 3321 });
+    expect(mockSplashRuntime.start).toHaveBeenCalledOnce();
+    const stopped = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post("/api/companies/company-1/adapters/lmstudio_splash_local/runtime/stop").send({}));
+    expect(stopped.status).toBe(200);
+    expect(mockLogActivity).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: "splash_runtime.started" }));
+    expect(mockLogActivity).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: "splash_runtime.stopped" }));
   });
 
   it("selects and refreshes the runner provider catalog independently", async () => {

@@ -7,6 +7,11 @@ app_project="$repo_root/macos/PaperclipStandaloneDev"
 runtime_dir="$app_project/runtime"
 app_bundle="$repo_root/dist/Paperclip Standalone V2.app"
 
+if pgrep -x PaperclipStandaloneV2 >/dev/null 2>&1; then
+  echo "A V2 app is running. Stop it cleanly before replacing its bundle." >&2
+  exit 1
+fi
+
 node_src=""
 for candidate in "$HOME"/.nvm/versions/node/v24.*/bin/node /opt/homebrew/opt/node@24/bin/node /opt/homebrew/bin/node; do
   [[ -x "$candidate" ]] || continue
@@ -21,14 +26,21 @@ if [[ -z "$node_src" ]]; then
 fi
 node_bin_dir="${node_src:h}"
 
-"$repo_root/script/build_local_runtime.sh" "$node_src"
+# Validate the bundle source before running the expensive build or replacing
+# the previous app. Model weights are never copied into the bundle.
+splash_prefix="$(brew --prefix splash)"
+splash_libexec="$(cd "$splash_prefix/libexec" && pwd -P)"
+"$node_src" -e 'const r=require(process.argv[1]);if(r.version!=="1.0.2")process.exit(1)' \
+  "$splash_libexec/release.json" || {
+  echo "Splash 1.0.2 must be installed locally before bundling V2." >&2
+  exit 1
+}
+[[ -x "$splash_libexec/python/bin/python3" && -x "$splash_libexec/engine/splash" && -f "$splash_prefix/LICENSE" ]] || {
+  echo "The installed Splash runtime is incomplete." >&2
+  exit 1
+}
 
-for app_pid in $(pgrep -x PaperclipStandaloneV2 2>/dev/null || true); do
-  for child_pid in $(pgrep -P "$app_pid" 2>/dev/null || true); do
-    kill -TERM "$child_pid" 2>/dev/null || true
-  done
-  kill -TERM "$app_pid" 2>/dev/null || true
-done
+"$repo_root/script/build_local_runtime.sh" "$node_src"
 
 swift build -c release --package-path "$app_project"
 rm -rf "$app_bundle"
@@ -37,6 +49,17 @@ mkdir -p "$app_bundle/Contents/MacOS" "$app_bundle/Contents/Resources/bin" \
 cp "$app_project/.build/release/PaperclipStandaloneV2" "$app_bundle/Contents/MacOS/PaperclipStandaloneV2"
 cp "$node_src" "$app_bundle/Contents/Resources/bin/node"
 cp -cR "$runtime_dir/node_modules" "$app_bundle/Contents/Resources/runtime/"
+
+# Splash is app-owned at runtime. Bundle its installed 1.0.2 program files,
+# never its model weights or Hugging Face cache.
+splash_bundle="$app_bundle/Contents/Resources/splash"
+mkdir -p "$splash_bundle"
+cp -cR "$splash_libexec/." "$splash_bundle/"
+cp "$splash_prefix/LICENSE" "$splash_bundle/LICENSE"
+[[ -x "$splash_bundle/python/bin/python3" && -x "$splash_bundle/engine/splash" ]] || {
+  echo "The bundled Splash runtime is incomplete." >&2
+  exit 1
+}
 
 cat > "$app_bundle/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -55,6 +78,7 @@ cat > "$app_bundle/Contents/Info.plist" <<'PLIST'
   <key>LSMultipleInstancesProhibited</key><true/>
   <key>PaperclipPort</key><integer>3319</integer>
   <key>PaperclipDatabasePort</key><integer>54333</integer>
+  <key>PaperclipSplashPort</key><integer>3321</integer>
   <key>PaperclipDataDirectoryName</key><string>Paperclip Standalone V2</string>
   <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict></plist>
