@@ -135,7 +135,7 @@ describe("direct LM Studio Splash heartbeat", () => {
   it("accepts controller-owned scratch and Git environment but rejects paid provider keys", () => {
     expect(assertLmStudioSplashConfig({ env: {
       PAPERCLIP_RUN_SCRATCH_DIR: "/tmp/run", TMPDIR: "/tmp/run", GIT_CONFIG_NOSYSTEM: "1",
-    } })).toBe(20);
+    } })).toBe(24);
     expect(() => assertLmStudioSplashConfig({ env: { OPENAI_API_KEY: "paid-key" } })).toThrow("provider environment");
   });
   it("executes a bounded coding tool call and returns a task response without a provider session", async () => {

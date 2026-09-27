@@ -17,7 +17,7 @@ export function assertLmStudioSplashConfig(config: Record<string, unknown>): num
       throw new Error("App-managed Splash cannot inherit a paid provider environment override.");
     }
   }
-  const steps = config.maxSteps ?? 20;
+  const steps = config.maxSteps ?? 24;
   if (typeof steps !== "number" || !Number.isInteger(steps) || steps < 1 || steps > 24) {
     throw new Error("App-managed Splash maxSteps must be an integer from 1 to 24.");
   }
