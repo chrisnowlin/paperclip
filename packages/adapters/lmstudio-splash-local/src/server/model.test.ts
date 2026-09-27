@@ -155,6 +155,21 @@ describe("LM Studio Splash model route", () => {
     });
   });
 
+  it("accepts five parallel streamed tool calls within the run budget", async () => {
+    const calls = Array.from({ length: 5 }, (_, index) => ({
+      index, id: `call-${index}`, type: "function",
+      function: { name: "list_files", arguments: JSON.stringify({ path: `dir-${index}` }) },
+    }));
+    const fetcher = sizedFetcher(streamResponse([
+      { choices: [{ delta: { tool_calls: calls }, finish_reason: null }] },
+      { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+      "[DONE]",
+    ]));
+    const turn = await completeLmStudioTurn({ messages: [], tools: [], fetcher, stream: true });
+    expect(turn.toolCalls).toHaveLength(5);
+    expect(turn.toolCalls[4]).toEqual({ id: "call-4", name: "list_files", arguments: { path: "dir-4" } });
+  });
+
   it("rejects an interrupted stream without releasing a partial tool call", async () => {
     const fetcher = sizedFetcher(streamResponse([
       { choices: [{ delta: { tool_calls: [{ index: 0, id: "call-1", type: "function", function: { name: "write_file", arguments: "{" } }] }, finish_reason: null }] },

@@ -11,7 +11,9 @@ const MAX_RESPONSE_BYTES = 1_048_576;
 const MAX_TOKENIZE_RESPONSE_BYTES = 2_000_000;
 const MAX_REQUEST_BYTES = 524_288;
 const MAX_CONTENT_CHARS = 65_536;
-const MAX_TOOL_CALLS = 4;
+// Match the coding loop's total run cap: Splash can emit more than four
+// parallel calls in one completed response, indexed from zero.
+const MAX_TOOL_CALLS = 48;
 const MAX_STREAM_BYTES = 64_000_000;
 const MAX_STREAM_FRAME_CHARS = 131_072;
 // Splash's non-streaming Chat response can take longer than Node fetch's
