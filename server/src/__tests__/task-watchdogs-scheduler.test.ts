@@ -13,6 +13,7 @@ import {
   issueComments,
   issueDocuments,
   issueApprovals,
+  issueRelations,
   issueThreadInteractions,
   issueWorkProducts,
   issues,
@@ -51,6 +52,7 @@ describeEmbeddedPostgres("task watchdog scheduler", () => {
     await db.delete(issueDocuments);
     await db.delete(documents);
     await db.delete(issueComments);
+    await db.delete(issueRelations);
     await db.delete(heartbeatRuns);
     await db.delete(agentWakeupRequests);
     await db.delete(issueWatchdogs);
@@ -732,6 +734,36 @@ describeEmbeddedPostgres("task watchdog scheduler", () => {
     const result = await service.reconcileTaskWatchdogs({ companyId });
 
     expect(result).toMatchObject({ checked: 1, triggered: 1 });
+    expect(wakes).toHaveLength(1);
+  });
+
+  it("does not wake a watchdog while an external blocker is running, then wakes if it stops", async () => {
+    const companyId = await seedCompany();
+    const agentId = await seedAgent(companyId);
+    const sourceId = await seedIssue(companyId, { status: "todo", assigneeAgentId: agentId });
+    const childId = await seedIssue(companyId, { status: "blocked", parentId: sourceId, assigneeAgentId: agentId });
+    const blockerId = await seedIssue(companyId, { status: "in_progress", assigneeAgentId: agentId });
+    await db.insert(issueRelations).values({
+      companyId,
+      issueId: blockerId,
+      relatedIssueId: childId,
+      type: "blocks",
+    });
+    const [run] = await db.insert(heartbeatRuns).values({
+      companyId,
+      agentId,
+      status: "running",
+      invocationSource: "assignment",
+      contextSnapshot: { issueId: blockerId },
+    }).returning();
+    await seedWatchdog(companyId, sourceId, agentId);
+    const { service, wakes } = createService();
+
+    expect(await service.reconcileTaskWatchdogs({ companyId })).toMatchObject({ checked: 1, triggered: 0, live: 1 });
+    expect(wakes).toHaveLength(0);
+
+    await db.update(heartbeatRuns).set({ status: "failed" }).where(eq(heartbeatRuns.id, run!.id));
+    expect(await service.reconcileTaskWatchdogs({ companyId })).toMatchObject({ checked: 1, triggered: 1 });
     expect(wakes).toHaveLength(1);
   });
 

@@ -191,6 +191,9 @@ export type TaskWatchdogClassifierInput = {
   activeRuns?: TaskWatchdogClassifierPath[];
   queuedWakeRequests?: TaskWatchdogClassifierPath[];
   blockers?: TaskWatchdogClassifierRelation[];
+  // Non-terminal first-class blockers outside the watched subtree that have
+  // a live run or queued wake. Waiting on them is an active dependency path.
+  externalLiveBlockerIssueIds?: string[];
   pendingInteractions?: TaskWatchdogClassifierWaitingPath[];
   pendingApprovals?: TaskWatchdogClassifierWaitingPath[];
   // Timestamp the evaluation reads its snapshot at. When provided together
@@ -468,6 +471,21 @@ export function classifyTaskWatchdogSubtree(input: TaskWatchdogClassifierInput):
     blockersByIssueId.set(relation.blockedIssueId, list);
   }
 
+  const nonTerminalLeaves = included
+    .filter((issue) => (includedChildrenByParentId.get(issue.id) ?? []).length === 0)
+    .filter((issue) => !isTerminalIssueStatus(issue.status));
+  const liveExternalBlockerIds = new Set(input.externalLiveBlockerIssueIds ?? []);
+  if (nonTerminalLeaves.length > 0 && nonTerminalLeaves.every((issue) =>
+    (blockersByIssueId.get(issue.id) ?? []).some((blockerId) => liveExternalBlockerIds.has(blockerId))
+  )) {
+    return {
+      state: "live",
+      reason: "Every unfinished leaf is waiting on a first-class blocker with a live run or queued wake.",
+      includedIssueIds: includedIds,
+      liveIssueIds: [...liveExternalBlockerIds].sort(),
+    };
+  }
+
   const nonTerminalIssues = included
     .filter((issue) => !isTerminalIssueStatus(issue.status))
     .sort((left, right) => left.id.localeCompare(right.id));
@@ -484,9 +502,7 @@ export function classifyTaskWatchdogSubtree(input: TaskWatchdogClassifierInput):
       .sort((left, right) => left.id.localeCompare(right.id))] as const)
     .filter(([, waits]) => waits.length > 0));
 
-  const leaves = included
-    .filter((issue) => (includedChildrenByParentId.get(issue.id) ?? []).length === 0)
-    .filter((issue) => !isTerminalIssueStatus(issue.status))
+  const leaves = nonTerminalLeaves
     .sort((left, right) => left.id.localeCompare(right.id))
     .map((issue) => ({
       issueId: issue.id,
@@ -1078,6 +1094,55 @@ export function taskWatchdogService(db: Db, deps: TaskWatchdogServiceDeps = {}) 
     const latestDocumentByIssueId = new Map(documentActivityRows.map((row) => [row.issueId, row.latestAt]));
     const latestWorkProductByIssueId = new Map(workProductActivityRows.map((row) => [row.issueId, row.latestAt]));
 
+    const subtreeIssueIdSet = new Set(subtreeIssueIds);
+    const externalBlockerIds = [...new Set(blockerRows
+      .map((row) => row.blockerIssueId)
+      .filter((id) => !subtreeIssueIdSet.has(id)))];
+    const externalLiveBlockerIssueIds: string[] = [];
+    if (externalBlockerIds.length > 0) {
+      const [blockerIssues, blockerRuns, blockerIssueRuns, blockerWakes] = await Promise.all([
+        db.select({ id: issues.id, status: issues.status }).from(issues).where(and(
+          eq(issues.companyId, companyId),
+          inArray(issues.id, externalBlockerIds),
+          visibleIssueCondition(),
+        )),
+        db.select({ contextSnapshot: heartbeatRuns.contextSnapshot }).from(heartbeatRuns).where(and(
+          eq(heartbeatRuns.companyId, companyId),
+          inArray(heartbeatRuns.status, [...TASK_WATCHDOG_LIVE_RUN_STATUSES]),
+          or(
+            inArray(sql`${heartbeatRuns.contextSnapshot}->>'issueId'`, externalBlockerIds),
+            inArray(sql`${heartbeatRuns.contextSnapshot}->>'taskId'`, externalBlockerIds),
+          ),
+        )),
+        db.select({ issueId: issues.id }).from(issues)
+          .innerJoin(heartbeatRuns, eq(issues.executionRunId, heartbeatRuns.id))
+          .where(and(
+            eq(issues.companyId, companyId),
+            inArray(issues.id, externalBlockerIds),
+            inArray(heartbeatRuns.status, [...TASK_WATCHDOG_LIVE_RUN_STATUSES]),
+          )),
+        db.select({ payload: agentWakeupRequests.payload }).from(agentWakeupRequests).where(and(
+          eq(agentWakeupRequests.companyId, companyId),
+          inArray(agentWakeupRequests.status, [...TASK_WATCHDOG_WAKE_REQUEST_STATUSES]),
+          or(
+            inArray(sql`${agentWakeupRequests.payload}->>'issueId'`, externalBlockerIds),
+            inArray(sql`${agentWakeupRequests.payload}->>'taskId'`, externalBlockerIds),
+            inArray(sql`${agentWakeupRequests.payload}->'_paperclipWakeContext'->>'issueId'`, externalBlockerIds),
+            inArray(sql`${agentWakeupRequests.payload}->'_paperclipWakeContext'->>'taskId'`, externalBlockerIds),
+          ),
+        )),
+      ]);
+      const eligibleBlockerIds = new Set(blockerIssues
+        .filter((row) => !isTerminalIssueStatus(row.status))
+        .map((row) => row.id));
+      const liveBlockerIds = new Set([
+        ...blockerRuns.map((row) => issueIdFromRunContext(row.contextSnapshot)),
+        ...blockerIssueRuns.map((row) => row.issueId),
+        ...blockerWakes.map((row) => issueIdFromWakePayload(row.payload)),
+      ]);
+      externalLiveBlockerIssueIds.push(...[...eligibleBlockerIds].filter((id) => liveBlockerIds.has(id)));
+    }
+
     const evaluatedAt = new Date();
     const evaluatedAtMs = evaluatedAt.getTime();
     // Only the issues created within the first-run grace window can be racing
@@ -1116,6 +1181,7 @@ export function taskWatchdogService(db: Db, deps: TaskWatchdogServiceDeps = {}) 
         issueId: issueIdFromWakePayload(row.payload),
       })),
       blockers: blockerRows,
+      externalLiveBlockerIssueIds,
       pendingInteractions: interactionRows,
       pendingApprovals: approvalRows,
       evaluatedAt,

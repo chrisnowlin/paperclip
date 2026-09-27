@@ -50,6 +50,40 @@ describe("task watchdog subtree classifier", () => {
     });
   });
 
+  it("waits while every unfinished leaf is blocked by an active external issue", () => {
+    const result = classify({
+      issues: [issue(), issue({ id: childId, parentId: sourceId, status: "blocked" })],
+      blockers: [{ companyId, blockedIssueId: childId, blockerIssueId: "external-1" }],
+      externalLiveBlockerIssueIds: ["external-1"],
+    });
+
+    expect(result).toMatchObject({ state: "live", liveIssueIds: ["external-1"] });
+  });
+
+  it("still detects a stopped subtree when an external blocker has no live path", () => {
+    const result = classify({
+      issues: [issue(), issue({ id: childId, parentId: sourceId, status: "blocked" })],
+      blockers: [{ companyId, blockedIssueId: childId, blockerIssueId: "external-1" }],
+      externalLiveBlockerIssueIds: [],
+    });
+
+    expect(result.state).toBe("stopped");
+  });
+
+  it("does not hide an unrelated idle leaf behind another leaf's active blocker", () => {
+    const result = classify({
+      issues: [
+        issue(),
+        issue({ id: childId, parentId: sourceId, status: "blocked" }),
+        issue({ id: "child-2", parentId: sourceId, status: "todo" }),
+      ],
+      blockers: [{ companyId, blockedIssueId: childId, blockerIssueId: "external-1" }],
+      externalLiveBlockerIssueIds: ["external-1"],
+    });
+
+    expect(result.state).toBe("stopped");
+  });
+
   it("treats terminal and waiting leaves as stopped work that needs verification", () => {
     const result = classify({
       issues: [

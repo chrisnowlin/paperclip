@@ -737,6 +737,8 @@ The reusable watchdog issue is a child of the watched source issue for audit and
 
 Task watchdog evaluation is conservative. If any included issue has a live run, queued wake, or scheduled retry that should fire without intervention, the subtree is live and the task watchdog does not run.
 
+An unfinished leaf blocked by a first-class dependency outside the watched subtree also has a live path while that non-terminal blocker has a live run or queued wake. When every unfinished leaf is covered by such a dependency, the watchdog waits. If an external blocker loses its live path, the ordinary stopped-subtree evaluation resumes so a stalled dependency can be reviewed.
+
 If no included issue has a live path, Paperclip computes a stop fingerprint from durable subtree state, including at least:
 
 - included leaf issue ids, statuses, assignees, and latest durable update timestamps
