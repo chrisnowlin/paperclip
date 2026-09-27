@@ -18,6 +18,8 @@ When `SPLASH_WEIGHT_CACHE` names an existing absolute directory, the 8 GiB check
 
 The existing Paperclip-owned five-tool coding loop and single-run queue remain intact. Its model requests and environment tests now address only the app-owned Splash server. Claude, OpenAI, and OpenCode account bindings are unchanged. The local adapter never receives their credentials.
 
+V2 configures both the server context ceiling and the requested output ceiling at 85% of the model's native 262,144 tokens: 222,822 tokens each. Chat requests count the exact rendered prompt through Splash's `/apply-template` and `/tokenize` endpoints, then request no more than the context remaining after that prompt. This avoids Splash's HTTP 400 for `prompt + max_tokens > context` while preserving the requested maximum. Incomplete responses still fail closed before any partial tool call is executed.
+
 ## Qualification
 
 Focused tests cover relocated runtime imports, offline launch arguments, model/port identity, startup failure, concurrent Start calls, Stop while busy, no download, and unchanged paid-provider routing. A live check requires at least 8 GiB free disk and no other loaded local LLM, then a disposable task through the V2 app. The currently running V2 process must not be restarted while another agent run is active.

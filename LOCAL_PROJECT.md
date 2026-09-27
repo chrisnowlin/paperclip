@@ -40,6 +40,8 @@ The Splash agent can be the local-trusted owner. It has Paperclip-owned file, co
 
 Only one Splash agent run executes at a time in the V2 server. Three more may wait FIFO for up to ten minutes; a full queue fails visibly, and Stop removes a waiter. The slot covers the entire coding/tool run. Stop Splash refuses while work is active, and Start Splash refuses when another local LLM is loaded or port `3321` is occupied.
 
+The bundled Qwen model has a native 262,144-token context. V2 requests 85% of that limit (222,822 tokens) and caps output at the same value. Before each Chat turn, the adapter asks Splash to render and tokenize the prompt, then reduces the requested output to the remaining context. A length-limited answer is never treated as a completed tool call or final answer.
+
 On a parked backlog task in that project, choose **Attach coding pod**. Attachment pins the owner, reviewer, and board approver to that task and leaves it parked. Start the owner through the normal Paperclip workflow when ready. A clean committed owner worktree becomes an exact Git candidate before reviewer dispatch. The reviewer uses a separate worktree pinned to that commit and a restricted read/test policy. The task cockpit links the candidate comparison through GitHub when available or a bounded local diff otherwise, plus the workspaces, plan, work products, run ledger, and stage comments. Board approval requires a written decision and the candidate must still match the source worktree. If it moved or became dirty, return the task to the owner for a new clean candidate.
 
 V2's initial project and task data are separate from the V1 app. Do not launch live agents during build or smoke verification; a live coding-pod qualification needs a separate explicit request.

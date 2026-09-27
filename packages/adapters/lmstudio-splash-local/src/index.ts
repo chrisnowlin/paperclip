@@ -2,6 +2,9 @@ export const type = "lmstudio_splash_local";
 export const label = "Splash (app-managed)";
 export const LMSTUDIO_SPLASH_MODEL = "qwen3.8-27b-splash";
 export const SPLASH_PACKAGE_ID = "incoai/Qwen3.8-27B-Splash";
+export const SPLASH_NATIVE_MAX_TOKENS = 262_144;
+export const SPLASH_CONTEXT_TOKEN_LIMIT = Math.floor(SPLASH_NATIVE_MAX_TOKENS * 0.85);
+export const SPLASH_OUTPUT_TOKEN_BUDGET = Math.floor(SPLASH_NATIVE_MAX_TOKENS * 0.85);
 export const models = [{ id: LMSTUDIO_SPLASH_MODEL, label: "Qwen3.8 27B Splash" }];
 
 export const agentConfigurationDoc = `# App-managed Splash local agent

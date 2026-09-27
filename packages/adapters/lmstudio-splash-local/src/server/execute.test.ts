@@ -18,7 +18,9 @@ async function workspace() {
 }
 function splashReadiness(url: string): Response | null {
   if (url.endsWith("/ready")) return new Response(JSON.stringify({ status: "ready" }));
-  if (url.endsWith("/status")) return new Response(JSON.stringify({ instance: {
+  if (url.endsWith("/apply-template")) return new Response(JSON.stringify({ prompt: "rendered prompt" }));
+  if (url.endsWith("/tokenize")) return new Response(JSON.stringify({ tokens: Array(100).fill(1) }));
+  if (url.endsWith("/status")) return new Response(JSON.stringify({ maximum_context_tokens: 222_822, instance: {
     model: "incoai/Qwen3.8-27B-Splash", host: "127.0.0.1", port: 3321,
   } }));
   if (url.endsWith("/v1/models")) return new Response(JSON.stringify({ data: [{

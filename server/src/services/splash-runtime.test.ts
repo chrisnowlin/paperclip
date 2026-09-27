@@ -9,7 +9,7 @@ import { AppOwnedSplashRuntime, prepareOfflineSplashAssets, probeAppOwnedSplash 
 
 const GIB = 1024 ** 3;
 const ready = (pid = 4812) => ({
-  status: { instance: { pid, model: "incoai/Qwen3.8-27B-Splash", host: "127.0.0.1", port: 3321 } },
+  status: { maximum_context_tokens: 222_822, instance: { pid, model: "incoai/Qwen3.8-27B-Splash", host: "127.0.0.1", port: 3321 } },
   models: { data: [
     { id: "incoai/Qwen3.8-27B-Splash", owned_by: "splash" },
     { id: "qwen3.8-27b-splash", root: "incoai/Qwen3.8-27B-Splash", owned_by: "splash" },
@@ -73,6 +73,7 @@ describe("app-owned Splash runtime", () => {
     expect(args).toContain("/bundle/splash/install/launcher.py");
     expect(args).toContain("incoai/Qwen3.8-27B-Splash");
     expect(args).toContain("--served-model-name=qwen3.8-27b-splash");
+    expect(args).toContain("222822");
     expect(args).toContain("3321");
     expect(options.env?.HF_HUB_OFFLINE).toBe("1");
     expect(options.env?.HF_HUB_CACHE).toBe("/Users/operator/.cache/huggingface/hub");

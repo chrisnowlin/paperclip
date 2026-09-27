@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createServer } from "node:net";
 import { splashRunQueue } from "@paperclipai/adapter-lmstudio-splash-local/server";
+import { SPLASH_CONTEXT_TOKEN_LIMIT } from "@paperclipai/adapter-lmstudio-splash-local";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
 
 export const APP_SPLASH_PORT = 3321;
@@ -55,9 +56,11 @@ export async function probeAppOwnedSplash(pid: number, fetcher: typeof fetch = f
   try {
     const ready = record(await get("/ready"));
     if (ready.status !== "ready") return false;
-    const instance = record(record(await get("/status")).instance);
+    const status = record(await get("/status"));
+    const instance = record(status.instance);
     if (instance.pid !== pid || instance.model !== APP_SPLASH_MODEL ||
-        instance.host !== "127.0.0.1" || instance.port !== APP_SPLASH_PORT) return false;
+        instance.host !== "127.0.0.1" || instance.port !== APP_SPLASH_PORT ||
+        status.maximum_context_tokens !== SPLASH_CONTEXT_TOKEN_LIMIT) return false;
     const models = record(await get("/v1/models")).data;
     return Array.isArray(models) && models.some((entry: unknown) => {
       const model = record(entry);
@@ -257,7 +260,7 @@ export class AppOwnedSplashRuntime {
     if (configuredWeightCache) env.SPLASH_WEIGHT_CACHE = configuredWeightCache;
     const args = ["-u", launcher, "serve", "--host", "127.0.0.1", "--port", String(APP_SPLASH_PORT),
       "--model", APP_SPLASH_MODEL, `--served-model-name=${APP_SPLASH_ALIAS}`,
-      "--max-memory", "28G", "--max-context", "32K", "--no-webui"];
+      "--max-memory", "28G", "--max-context", String(SPLASH_CONTEXT_TOKEN_LIMIT), "--no-webui"];
     let child: SplashChild;
     try {
       child = this.deps.spawnProcess(python, args, { cwd: root, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });

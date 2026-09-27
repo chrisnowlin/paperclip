@@ -5,7 +5,8 @@ describe("app-owned Splash setup readiness", () => {
   it("reports a loaded exact Splash model without inference", async () => {
     const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(
       url.endsWith("/ready") ? { status: "ready" }
-        : url.endsWith("/status") ? { instance: { model: "incoai/Qwen3.8-27B-Splash", host: "127.0.0.1", port: 3321 } }
+        : url.endsWith("/status") ? { maximum_context_tokens: 222_822,
+          instance: { model: "incoai/Qwen3.8-27B-Splash", host: "127.0.0.1", port: 3321 } }
           : { data: [{ id: "qwen3.8-27b-splash", root: "incoai/Qwen3.8-27B-Splash", owned_by: "splash" }] },
     ), { status: 200 }));
     vi.stubGlobal("fetch", fetcher);

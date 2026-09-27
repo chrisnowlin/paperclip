@@ -1,10 +1,13 @@
-import { LMSTUDIO_SPLASH_MODEL, SPLASH_PACKAGE_ID } from "../index.js";
+import { LMSTUDIO_SPLASH_MODEL, SPLASH_PACKAGE_ID, SPLASH_CONTEXT_TOKEN_LIMIT, SPLASH_OUTPUT_TOKEN_BUDGET } from "../index.js";
 export { LMSTUDIO_SPLASH_MODEL };
 const READY_URL = "http://127.0.0.1:3321/ready";
 const STATUS_URL = "http://127.0.0.1:3321/status";
 const MODELS_URL = "http://127.0.0.1:3321/v1/models";
 const COMPLETIONS_URL = "http://127.0.0.1:3321/v1/chat/completions";
+const TEMPLATE_URL = "http://127.0.0.1:3321/apply-template";
+const TOKENIZE_URL = "http://127.0.0.1:3321/tokenize";
 const MAX_RESPONSE_BYTES = 1_048_576;
+const MAX_TOKENIZE_RESPONSE_BYTES = 2_000_000;
 const MAX_REQUEST_BYTES = 524_288;
 const MAX_CONTENT_CHARS = 65_536;
 const MAX_TOOL_CALLS = 4;
@@ -31,7 +34,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-async function readBoundedJson(response: Response): Promise<unknown> {
+async function readBoundedJson(response: Response, maxBytes = MAX_RESPONSE_BYTES): Promise<unknown> {
   if (!response.body) throw new Error("Splash returned an empty response.");
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -41,7 +44,7 @@ async function readBoundedJson(response: Response): Promise<unknown> {
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > MAX_RESPONSE_BYTES) {
+      if (size > maxBytes) {
         await reader.cancel();
         throw new Error("Splash response exceeds the size limit.");
       }
@@ -74,7 +77,8 @@ export async function probeLmStudioSplash(fetcher: typeof fetch = fetch, signal?
   if (!isRecord(readiness) || readiness.status !== "ready") throw new Error("The app-owned Splash server is not ready.");
   const status = await get(STATUS_URL);
   const instance = isRecord(status) ? status.instance : null;
-  if (!isRecord(instance) || instance.model !== SPLASH_PACKAGE_ID || instance.host !== "127.0.0.1" || instance.port !== 3321) {
+  if (!isRecord(instance) || instance.model !== SPLASH_PACKAGE_ID || instance.host !== "127.0.0.1" || instance.port !== 3321 ||
+      !isRecord(status) || status.maximum_context_tokens !== SPLASH_CONTEXT_TOKEN_LIMIT) {
     throw new Error("The listener is not the app-owned Splash model.");
   }
   const catalog = await get(MODELS_URL);
@@ -92,24 +96,58 @@ export async function completeLmStudioTurn(input: {
   signal?: AbortSignal;
   fetcher?: typeof fetch;
 }): Promise<{ content: string | null; toolCalls: LmStudioToolCall[]; usage: { inputTokens: number; outputTokens: number } }> {
+  const fetcher = input.fetcher ?? fetch;
+  const sizingBody = JSON.stringify({
+    model: LMSTUDIO_SPLASH_MODEL,
+    messages: input.messages,
+    tools: input.tools,
+    tool_choice: "auto",
+    temperature: 0,
+    stream: false,
+  });
+  if (Buffer.byteLength(sizingBody) > MAX_REQUEST_BYTES) throw new Error("Splash request exceeds the size limit.");
+  const sizingRequest = async (url: string, body: string, maxBytes = MAX_RESPONSE_BYTES) => {
+    let response: Response;
+    try {
+      response = await fetcher(url, { method: "POST", redirect: "error",
+        headers: { "Content-Type": "application/json" }, body,
+        signal: requestSignal(input.signal, 30_000) });
+    } catch { throw new Error("App-owned Splash prompt sizing is unavailable; no model turn was sent."); }
+    if (!response.ok) throw new Error(`Splash prompt sizing failed with HTTP ${response.status}; no model turn was sent.`);
+    return readBoundedJson(response, maxBytes);
+  };
+  // Splash's Chat endpoint rejects prompt_tokens + max_tokens above its context
+  // limit. Its template and tokenizer endpoints use the same text-only rendering
+  // path as generation, so size this turn before requesting the 85% ceiling.
+  const template = await sizingRequest(TEMPLATE_URL, sizingBody);
+  if (!isRecord(template) || typeof template.prompt !== "string") throw new Error("Splash prompt template is malformed.");
+  const tokenBody = JSON.stringify({ content: template.prompt, add_special: false });
+  if (Buffer.byteLength(tokenBody) > MAX_REQUEST_BYTES) throw new Error("Splash rendered prompt exceeds the size limit.");
+  const tokenized = await sizingRequest(TOKENIZE_URL, tokenBody, MAX_TOKENIZE_RESPONSE_BYTES);
+  if (!isRecord(tokenized) || !Array.isArray(tokenized.tokens) ||
+      tokenized.tokens.some((token: unknown) => !Number.isSafeInteger(token))) {
+    throw new Error("Splash prompt token count is malformed.");
+  }
+  const remainingContext = SPLASH_CONTEXT_TOKEN_LIMIT - tokenized.tokens.length;
+  if (remainingContext <= 0) throw new Error("Splash prompt fills the configured context window.");
   const payload = JSON.stringify({
     model: LMSTUDIO_SPLASH_MODEL,
     messages: input.messages,
     tools: input.tools,
     tool_choice: "auto",
     temperature: 0,
-    max_tokens: 2_048,
+    max_tokens: Math.min(SPLASH_OUTPUT_TOKEN_BUDGET, remainingContext),
     stream: false,
   });
   if (Buffer.byteLength(payload) > MAX_REQUEST_BYTES) throw new Error("Splash request exceeds the size limit.");
   let response: Response;
   try {
-    response = await (input.fetcher ?? fetch)(COMPLETIONS_URL, {
+    response = await fetcher(COMPLETIONS_URL, {
       method: "POST",
       redirect: "error",
       headers: { "Content-Type": "application/json" },
       body: payload,
-      signal: requestSignal(input.signal, 120_000),
+      signal: requestSignal(input.signal, 600_000),
     });
   } catch {
     throw new Error("App-owned Splash inference is unavailable or timed out; no alternate provider was tried.");
@@ -119,6 +157,9 @@ export async function completeLmStudioTurn(input: {
   const choice = isRecord(body) && Array.isArray(body.choices) ? body.choices[0] : null;
   const message = isRecord(choice) ? choice.message : null;
   if (!isRecord(message)) throw new Error("Splash completion is malformed.");
+  if (isRecord(choice) && choice.finish_reason === "length") {
+    throw new Error(`Splash returned a length-limited answer with a requested output budget of ${SPLASH_OUTPUT_TOKEN_BUDGET.toLocaleString("en-US")} tokens; no partial tools were run.`);
+  }
   const content = message.content === null || message.content === undefined ? null : message.content;
   if (content !== null && (typeof content !== "string" || content.length > MAX_CONTENT_CHARS)) {
     throw new Error("Splash completion content is invalid.");
