@@ -248,7 +248,7 @@ describe("direct LM Studio Splash heartbeat", () => {
     expect(actionlessTurnExhausted(9 * 60_000, 25_000, 0, 60_000)).toBe(true);
   });
 
-  it("refocuses a long actionless local turn once before failing the run", async () => {
+  it.each(["cto", "engineer"] as const)("refocuses a long actionless %s turn once before failing the run", async (role) => {
     const root = await workspace();
     vi.useFakeTimers();
     let resolveStarted!: () => void;
@@ -277,7 +277,7 @@ describe("direct LM Studio Splash heartbeat", () => {
     }));
     const logs: string[] = [];
     const run = execute({
-      runId: "run-refocus", agent: { id: "agent-1", companyId: "company-1", name: "Local", role: "cto",
+      runId: "run-refocus", agent: { id: "agent-1", companyId: "company-1", name: "Local", role,
         adapterType: "lmstudio_splash_local", adapterConfig: {} },
       runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
       config: { cwd: root }, context: context(root), authToken: "private-run-token",

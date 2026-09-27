@@ -260,9 +260,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
             lastGenerated = Math.max(lastGenerated, current.decodeTokens - progressBaseline.decodeTokens);
           }
           const toolDraftAgeMs = toolDraft ? Date.now() - toolDraft.updatedAt : Number.POSITIVE_INFINITY;
-          const coordinatorRefocus = (ctx.agent.role === "cto" || ctx.agent.role === "ceo") &&
+          const localRoleRefocus = (ctx.agent.role === "cto" || ctx.agent.role === "ceo" ||
+            ctx.agent.role === "engineer") &&
             actionlessTurnNeedsRefocus(Date.now() - turnStarted, lastGenerated, reasoningChars, toolDraftAgeMs);
-          if (coordinatorRefocus && !actionlessAbort.signal.aborted) {
+          if (localRoleRefocus && !actionlessAbort.signal.aborted) {
             actionlessAbortReason = refocusAttempts === 0 ? "refocus" : "scope_stall";
             actionlessAbort.abort();
             return;
