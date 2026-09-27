@@ -49,7 +49,7 @@ Only one Splash agent run executes at a time in the V2 server. Three more may wa
 
 The bundled Qwen model has a native 262,144-token context. V2 requests 85% of that limit (222,822 tokens) and caps output at the same value. Before each Chat turn, the adapter asks Splash to render and tokenize the prompt, then reduces the requested output to the remaining context. A length-limited answer is never treated as a completed tool call or final answer.
 
-During a long local turn, the live run status refreshes every 15 seconds with prompt tokens, that turn's output allowance, and an approximate count of output tokens generated so far. The count is a delta from Splash's model-wide decode counter, so another loopback client could affect it; it does not predict how much of the model's output will be visible after reasoning ends.
+During a long local turn, the live run status refreshes every 15 seconds with the current model-step number, prompt tokens, that turn's output allowance, and an approximate count of output tokens generated so far. The count is a delta from Splash's model-wide decode counter, so another loopback client could affect it; it does not predict how much of the model's output will be visible after reasoning ends. When three model turns remain, the adapter tells the agent to stop broad inspection and record an evidence-backed task disposition or exact blocker before the hard step limit.
 
 A run waiting for the single local model slot refreshes its wait status every 30 seconds and shows **Waiting for local model** in the execution badge. Once Splash is prefilling or generating, the badge shows **Working** even before the first durable run-log line. These are ephemeral status signals; they do not change task ownership or run state.
 

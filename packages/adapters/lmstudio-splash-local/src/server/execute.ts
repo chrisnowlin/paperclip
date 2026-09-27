@@ -214,12 +214,18 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     let dispatched = false;
     for (let step = 0; step < maxSteps; step += 1) {
       if (runSignal.aborted) throw new Error("App-managed Splash run was cancelled or timed out.");
+      if (step === maxSteps - 3) {
+        const taskPath = issueId && ISSUE_ID_PATTERN.test(issueId)
+          ? `/api/issues/${issueId}` : "the current Paperclip task";
+        messages.push({ role: "system", content:
+          `Only three local model turns remain in this run. Stop broad inspection and do not start a new deliverable. Preserve coherent work, run one finite check if needed, then use paperclip_request to record the task's real disposition at ${taskPath}: done with evidence, or blocked/in_review with the exact remaining owner and action. A comment or final prose alone is not a task disposition. Return a concise final response before the step limit; never claim unverified work is done.` });
+      }
       const staleBeforeTurn = await readTaskSkipReason({ apiUrl, issueId, agentId: ctx.agent.id,
         authToken: ctx.authToken, signal: runSignal });
       if (staleBeforeTurn) return skippedTaskResult(ctx, staleBeforeTurn, { inputTokens, outputTokens });
       await probeLmStudioSplash(fetch, runSignal);
       if (!dispatched) { ctx.onDispatch?.(); dispatched = true; }
-      await reportQueueStatus("Splash is generating locally; a turn can take several minutes.", "run_activity");
+      await reportQueueStatus(`Splash step ${step + 1}/${maxSteps} is generating locally; a turn can take several minutes.`, "run_activity");
       const turnStarted = Date.now();
       const decodeBaseline = await readSplashDecodeTokens(fetch, runSignal);
       let budget: { promptTokens: number; maxOutputTokens: number } | null = null;
@@ -251,7 +257,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           const activity = toolDraft && toolDraftAgeMs < 60_000
             ? ` · assembling ${toolDraft.name} (${toolDraft.argumentChars.toLocaleString("en-US")} chars)`
             : excerpt ? ` · thinking: ${excerpt}` : "";
-          await reportQueueStatus(`Splash ${count}${limit} · ${elapsed}m${activity}`, "run_activity");
+          await reportQueueStatus(`Splash step ${step + 1}/${maxSteps} · ${count}${limit} · ${elapsed}m${activity}`, "run_activity");
         })().finally(() => { progressPending = false; });
       }, 15_000);
       progressTimer.unref();
@@ -265,7 +271,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         },
         onTokenBudget: async (measured) => {
           budget = measured;
-          await reportQueueStatus(`Splash prompt: ${measured.promptTokens.toLocaleString("en-US")} tokens; output allowance: ${measured.maxOutputTokens.toLocaleString("en-US")} tokens.`, "run_activity");
+          await reportQueueStatus(`Splash step ${step + 1}/${maxSteps} prompt: ${measured.promptTokens.toLocaleString("en-US")} tokens; output allowance: ${measured.maxOutputTokens.toLocaleString("en-US")} tokens.`, "run_activity");
         } }); }
       catch (error) {
         if (actionlessAbort.signal.aborted && !runSignal.aborted) {

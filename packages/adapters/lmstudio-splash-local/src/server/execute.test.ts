@@ -523,17 +523,30 @@ describe("direct LM Studio Splash heartbeat", () => {
     const root = await workspace();
     const cancelled = new AbortController();
     cancelled.abort();
-    const fetcher = vi.fn(async (url: string) => splashReadiness(url) ?? streamTurn(toolTurn));
+    const modelMessages: unknown[] = [];
+    const progress: string[] = [];
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      const readiness = splashReadiness(url);
+      if (readiness) return readiness;
+      if (url.endsWith("/v1/chat/completions")) {
+        modelMessages.push((JSON.parse(String(init?.body)) as { messages: unknown }).messages);
+      }
+      return streamTurn(toolTurn);
+    });
     vi.stubGlobal("fetch", fetcher);
     const base = {
       runId: "run-3", agent: { id: "agent-1", companyId: "company-1", name: "Local", adapterType: "lmstudio_splash_local", adapterConfig: {} },
       runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
       context: context(root), authToken: "run-token", onLog: async () => {},
+      onRuntimeProgress: async (update: { message: string }) => { progress.push(update.message); },
     };
     await expect(execute({ ...base, config: { cwd: root }, signal: cancelled.signal })).rejects.toThrow("cancelled");
     expect(fetcher).not.toHaveBeenCalled();
-    await expect(execute({ ...base, config: { cwd: root, maxSteps: 2 } })).rejects.toThrow("step limit");
-    expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith("/v1/chat/completions"))).toHaveLength(2);
+    await expect(execute({ ...base, config: { cwd: root, maxSteps: 4 } })).rejects.toThrow("step limit");
+    expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith("/v1/chat/completions"))).toHaveLength(4);
+    expect(JSON.stringify(modelMessages[0])).not.toContain("Only three local model turns remain");
+    expect(JSON.stringify(modelMessages[1])).toContain("Only three local model turns remain");
+    expect(progress).toContainEqual(expect.stringContaining("Splash step 4/4"));
   });
 
   it("stops after a timed-out coding command instead of asking the model to repeat it", async () => {
