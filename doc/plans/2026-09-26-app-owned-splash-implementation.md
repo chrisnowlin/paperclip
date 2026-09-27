@@ -32,5 +32,5 @@
 ### Task 4: Review and live qualification
 
 - [x] Run focused tests, TypeScript/Swift checks, and a relocated-runtime smoke check.
-- [ ] Inspect free disk and active V2 runs before replacing the app. Run a disposable model task only when safe; report any storage or runtime blocker precisely.
+- [x] Inspect free disk and active V2 runs before replacing the app. Run a disposable model task through bundled Splash; verify recovery and explicit Stop/Start.
 - [x] Commit and push this work on the isolated branch.
