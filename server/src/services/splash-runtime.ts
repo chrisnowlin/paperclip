@@ -194,7 +194,7 @@ export class AppOwnedSplashRuntime {
 
   async requireReady(): Promise<void> {
     if ((await this.status()).state !== "ready") {
-      throw new SplashRuntimeError("splash_not_started", "Start the bundled Splash model in Paperclip before assigning work.");
+      throw new SplashRuntimeError("splash_not_started", "The bundled Splash model is unloaded; a local task can start it on demand.");
     }
   }
 

@@ -833,16 +833,19 @@ const lmStudioSplashLocalAdapter: ServerAdapterModule = {
   type: "lmstudio_splash_local",
   runtimeToolDelivery: "invocation_context",
   execute: async (ctx) => {
-    await appOwnedSplashRuntime.requireReady();
+    // A persisted local wake must survive an app restart or an unloaded idle
+    // model. start() coalesces concurrent wakes and verifies the exact child;
+    // failures remain local and never select another provider.
+    await appOwnedSplashRuntime.start();
     return lmStudioSplashExecute(ctx);
   },
   testEnvironment: async (ctx) => {
     try { await appOwnedSplashRuntime.requireReady(); }
     catch (error) {
-      return { adapterType: ctx.adapterType, status: "fail", testedAt: new Date().toISOString(), checks: [{
-        code: "splash_not_started", level: "error",
-        message: error instanceof Error ? error.message : "Start bundled Splash in Paperclip.",
-        hint: "Use Start Splash in the agent settings before assigning work.",
+      return { adapterType: ctx.adapterType, status: "warn", testedAt: new Date().toISOString(), checks: [{
+        code: "splash_not_started", level: "warn",
+        message: error instanceof Error ? error.message : "Bundled Splash is unloaded.",
+        hint: "A local task starts the bundled model on demand. Use Start Splash to prewarm it.",
       }] };
     }
     return lmStudioSplashTestEnvironment(ctx);
