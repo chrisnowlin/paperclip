@@ -140,6 +140,23 @@ describe("Paperclip-owned LM Studio coding tools", () => {
     await expect(tools.execute(call("paperclip_request", { method: "GET", path: `/api/issues/${issueId}/documents` }))).rejects.toThrow("allowed");
   });
 
+  it("permits only the issue-watchdog PUT under run authorization", async () => {
+    const root = await workspace();
+    const issueId = "11111111-1111-4111-8111-111111111111";
+    const agentId = "22222222-2222-4222-8222-222222222222";
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", { status: 200 }));
+    const tools = await createLmStudioToolExecutor({ workspace: root, companyId: "company-1", runId: "run-1",
+      authToken: "private-run-token", apiUrl: "http://127.0.0.1:3319", fetcher });
+    await tools.execute(call("paperclip_request", { method: "PUT", path: `/api/issues/${issueId}/watchdog`,
+      body: { agentId } }));
+    expect(fetcher).toHaveBeenCalledWith(`http://127.0.0.1:3319/api/issues/${issueId}/watchdog`, expect.objectContaining({
+      method: "PUT", headers: expect.objectContaining({ Authorization: "Bearer private-run-token", "X-Paperclip-Run-Id": "run-1" }),
+    }));
+    await expect(tools.execute(call("paperclip_request", { method: "PUT", path: `/api/issues/${issueId}`,
+      body: { status: "done" } }))).rejects.toThrow("allowed");
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
   it("requires task-create idempotency and never retries an uncertain mutation", async () => {
     const root = await workspace();
     const fetcher = vi.fn<typeof fetch>().mockRejectedValue(new Error("connection lost"));

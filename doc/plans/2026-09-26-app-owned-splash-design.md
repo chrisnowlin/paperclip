@@ -16,7 +16,7 @@ The bundle uses V2-owned writable runtime/model-link state and the existing Hugg
 
 When `SPLASH_WEIGHT_CACHE` names an existing absolute directory, the 8 GiB check applies to that volume. V2 still needs 0.5 GiB free for its private metadata. Without that setting, both checks apply to V2's data volume. The setting must be present in V2's environment before launch.
 
-The existing Paperclip-owned five-tool coding loop and single-run queue remain intact. Its model requests and environment tests now address only the app-owned Splash server. Claude, OpenAI, and OpenCode account bindings are unchanged. The local adapter never receives their credentials.
+The existing Paperclip-owned five-tool coding loop and single-run queue remain intact. Its model requests and environment tests now address only the app-owned Splash server. The run-scoped Paperclip request tool may configure an issue watchdog through the exact `/api/issues/{id}/watchdog` PUT route; Paperclip still enforces company, issue, and watchdog-run authority, and arbitrary PUT paths remain denied. Claude, OpenAI, and OpenCode account bindings are unchanged. The local adapter never receives their credentials.
 
 V2 configures both the server context ceiling and the requested output ceiling at 85% of the model's native 262,144 tokens: 222,822 tokens each. Chat requests count the exact rendered prompt through Splash's `/apply-template` and `/tokenize` endpoints, then request no more than the context remaining after that prompt. This avoids Splash's HTTP 400 for `prompt + max_tokens > context` while preserving the requested maximum. Incomplete responses still fail closed before any partial tool call is executed.
 
