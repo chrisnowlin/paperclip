@@ -33,6 +33,16 @@ function taskSkipReason(source: Record<string, unknown>, issueId: string, agentI
   return null;
 }
 
+function dispositionToolAllowed(call: { name: string; arguments: Record<string, unknown> }, issueId: string): boolean {
+  if (call.name !== "paperclip_request") return false;
+  const issuePath = `/api/issues/${issueId}`;
+  const method = call.arguments.method;
+  const path = call.arguments.path;
+  return (method === "GET" && (path === issuePath || path === `${issuePath}/comments`)) ||
+    (method === "PATCH" && path === issuePath) ||
+    (method === "POST" && path === `${issuePath}/comments`);
+}
+
 async function readTaskSkipReason(input: { apiUrl: string; issueId: string | null; agentId: string;
   authToken: string; signal: AbortSignal }): Promise<TaskSkipReason | null> {
   if (!input.issueId || !ISSUE_ID_PATTERN.test(input.issueId)) return null;
@@ -153,6 +163,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       : AbortSignal.timeout(MAX_RUN_MS);
     const apiUrl = buildPaperclipEnv(ctx.agent).PAPERCLIP_API_URL;
     const issueId = typeof ctx.context.taskId === "string" ? ctx.context.taskId : null;
+    const dispositionOnly = ctx.context.wakeReason === "finish_successful_run_handoff";
+    if (dispositionOnly && (!issueId || !ISSUE_ID_PATTERN.test(issueId))) {
+      throw new Error("Disposition-only Splash run is missing its source issue.");
+    }
     const taskPreflight = await preflightLocalTaskAndWatchdog({
       apiUrl, issueId,
       agentId: ctx.agent.id, companyId: ctx.agent.companyId,
@@ -166,6 +180,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     }
     const executor = await createLmStudioToolExecutor({ workspace: cwd, companyId: ctx.agent.companyId,
       runId: ctx.runId, authToken: ctx.authToken, apiUrl, signal: runSignal, onSpawn: ctx.onSpawn });
+    const modelTools = dispositionOnly ? executor.definitions
+      .filter((definition) => definition.function.name === "paperclip_request")
+      .map((definition) => ({ ...definition, function: {
+        ...definition.function,
+        description: `Disposition only: GET /api/issues/${issueId} or its /comments; PATCH that issue; POST a comment there. Workspace tools and other Paperclip paths are unavailable.`,
+        parameters: { ...definition.function.parameters, properties: {
+          method: { type: "string", enum: ["GET", "POST", "PATCH"] },
+          path: { type: "string", enum: [`/api/issues/${issueId}`, `/api/issues/${issueId}/comments`] },
+          body: { type: "object" },
+        } },
+      } })) : executor.definitions;
     const wake = renderPaperclipWakePrompt(ctx.context.paperclipWake);
     const task = selectPaperclipTaskMarkdown(ctx.context);
     const prompt = joinPromptSections([wake, task, typeof ctx.config.promptTemplate === "string" ? ctx.config.promptTemplate : ""]);
@@ -173,7 +198,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     await ctx.onMeta?.({ adapterType: "lmstudio_splash_local", command: "Bundled Splash local API", cwd,
       commandNotes: ["Fixed model and loopback endpoint; no provider session or paid account."], prompt });
     const messages: LmStudioMessage[] = [
-      { role: "system", content: systemGuidance(ctx.agent.role) },
+      { role: "system", content: dispositionOnly
+        ? `${systemGuidance(ctx.agent.role)} This is a disposition-only follow-up. Use only paperclip_request on this source issue. Do not inspect or change workspace files or run commands.`
+        : systemGuidance(ctx.agent.role) },
       { role: "user", content: prompt },
     ];
     let inputTokens = 0;
@@ -224,10 +251,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       }, 15_000);
       progressTimer.unref();
       let turn: Awaited<ReturnType<typeof completeLmStudioTurn>>;
-      try { turn = await completeLmStudioTurn({ messages, tools: executor.definitions, signal: turnSignal, stream: true,
+      try { turn = await completeLmStudioTurn({ messages, tools: modelTools, signal: turnSignal, stream: true,
         onReasoningDelta: (delta) => { reasoningTail = (reasoningTail + delta).slice(-160); reasoningChars += delta.length; },
         onToolDraftProgress: (progress) => {
-          const name = executor.definitions.some((definition) => definition.function.name === progress.name)
+          const name = modelTools.some((definition) => definition.function.name === progress.name)
             ? progress.name! : "tool";
           toolDraft = { name, argumentChars: progress.argumentChars, updatedAt: Date.now() };
         },
@@ -272,6 +299,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         let result: string;
         let isError = false;
         try {
+          if (dispositionOnly && !dispositionToolAllowed(call, issueId!)) {
+            throw new Error("Disposition-only run can only read or update its source Paperclip issue.");
+          }
           result = await executor.execute(call);
         } catch (error) {
           if (error instanceof UncertainPaperclipMutationError || error instanceof InterruptedCodingCommandError) throw error;

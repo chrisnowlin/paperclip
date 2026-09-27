@@ -107,6 +107,51 @@ describe("direct LM Studio Splash heartbeat", () => {
     expect(fetcher).toHaveBeenCalledOnce();
   });
 
+  it("keeps automatic disposition follow-ups out of the coding workspace", async () => {
+    const root = await workspace();
+    const issueId = "8eab2670-f2b8-4d0c-8f95-d595a1c30f78";
+    const agentId = "cc349b6e-bb92-45c3-b16c-e5f69c971015";
+    let issueStatus = "in_progress";
+    let modelTurns = 0;
+    let dispositionWrites = 0;
+    const advertisedTools: string[][] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith(`/api/issues/${issueId}/watchdog`)) return new Response(JSON.stringify({ id: "named-watcher" }));
+      if (url.endsWith(`/api/issues/${issueId}`)) {
+        if (init?.method === "PATCH") {
+          dispositionWrites += 1;
+          issueStatus = "done";
+        }
+        return new Response(JSON.stringify({ id: issueId, status: issueStatus, assigneeAgentId: agentId }));
+      }
+      const readiness = splashReadiness(url);
+      if (readiness) return readiness;
+      if (url.endsWith("/v1/chat/completions")) {
+        const body = JSON.parse(String(init?.body)) as { tools: Array<{ function: { name: string } }> };
+        advertisedTools.push(body.tools.map((tool) => tool.function.name));
+        modelTurns += 1;
+        const call = modelTurns === 1
+          ? { id: "forbidden", type: "function", function: { name: "write_file", arguments: '{"path":"unsafe.txt","content":"bad"}' } }
+          : { id: "disposition", type: "function", function: { name: "paperclip_request",
+            arguments: JSON.stringify({ method: "PATCH", path: `/api/issues/${issueId}`, body: { status: "done" } }) } };
+        return streamTurn({ choices: [{ finish_reason: "tool_calls", message: { content: null, tool_calls: [call] } }] });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const result = await execute({
+      runId: "run-disposition", agent: { id: agentId, companyId: "company-1", name: "Local",
+        adapterType: "lmstudio_splash_local", adapterConfig: {} },
+      runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+      config: { cwd: root }, context: { ...context(root), taskId: issueId,
+        wakeReason: "finish_successful_run_handoff" },
+      authToken: "private-run-token", onLog: async () => {},
+    });
+    expect(advertisedTools).toEqual([["paperclip_request"], ["paperclip_request"]]);
+    expect(dispositionWrites).toBe(1);
+    await expect(readFile(path.join(root, "unsafe.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    expect(result).toMatchObject({ resultJson: { skippedStaleTask: "done" } });
+  });
+
   it("does not apply a completed write tool after the board closes the task mid-generation", async () => {
     const root = await workspace();
     const issueId = "8eab2670-f2b8-4d0c-8f95-d595a1c30f78";
