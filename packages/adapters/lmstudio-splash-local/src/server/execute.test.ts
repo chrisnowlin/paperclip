@@ -82,6 +82,7 @@ describe("direct LM Studio Splash heartbeat", () => {
     });
     const system = (requests[0]?.messages as Array<{ content: string }>)[0]?.content ?? "";
     expect(system).toContain("at most three narrow child issues");
+    expect(system).toContain("If the current issue asks for implementation, implement its scoped deliverable yourself");
     expect(system).toContain("explicit assignees");
     expect(system).toContain("idempotency key");
     expect(system).toContain("named account binding");
