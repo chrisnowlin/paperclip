@@ -2,7 +2,7 @@
 
 ## Decision
 
-Keep `incoai/Qwen3.8-27B-Splash` as the app-managed model for current coding pods. Do not silently substitute Bonsai for it. `prism-ml/Ternary-Bonsai-2-27B-gguf:PQ2_0` is a viable **sequential alternative** on this M4 Max, with much lower resident model memory, but it did not improve throughput on the first matched local coding prompt. Before exposing it to agents, V2 needs an explicit per-agent model binding, a single-model switch that drains the run queue, and a readiness check against the selected model's exact package ID. A task assigned to the wrong loaded model must wait or fail clearly, never fall back.
+Keep `incoai/Qwen3.8-27B-Splash` as the app-managed model for current coding pods. Do not silently substitute Bonsai for it. `prism-ml/Ternary-Bonsai-2-27B-gguf:PQ2_0` is a viable **sequential alternative** on this M4 Max, with much lower resident model memory, but it did not improve throughput on the first matched local coding prompt. A later small simultaneous-load probe succeeded, but it left too little observed memory margin to schedule sustained parallel agent work. Before exposing Bonsai to agents, V2 needs an explicit per-agent model binding, a queue and memory admission policy, and a readiness check against the selected model's exact package ID. A task assigned to the wrong loaded model must wait or fail clearly, never fall back.
 
 ## Evidence
 
@@ -18,6 +18,14 @@ Keep `incoai/Qwen3.8-27B-Splash` as the app-managed model for current coding pod
 
 Bonsai also returned a valid structured `calculate(a=19,b=23)` tool call in 2.55 seconds. This proves API tool-call shape on one small request, not reliable multi-step coding work. The runtimes differ, and output lengths differ; a larger same-runtime task suite is needed before ranking model quality or speed generally.
 
+## Simultaneous-load probe
+
+After the user clarified that the one-model limit applied to two Qwen copies, we loaded Bonsai beside the app-owned Qwen process. Bonsai used its existing prepared weights, separate Splash 1.1.0 process, offline mode, port 3322, a 12 GiB memory cap, and a reduced 16K context for this short feasibility probe. Paperclip continued serving Qwen on port 3321 and its local SPL-49 coding run remained active. No agent was routed to Bonsai and no model weights were downloaded.
+
+- Both `/status` endpoints reported ready simultaneously. Bonsai used 9.44 GiB of Metal memory; Qwen reported 18.53 GiB during the overlap. macOS free-memory percentage fell to about 12–19%, with swap already near 15.3 of 16 GiB used.
+- A 48-token public prompt to Bonsai requested exactly `BONSAI_OK`. It returned that answer in 39 output tokens and about 4.7 seconds while Qwen's Paperclip run remained active; that run also continued editing its game file. This proves both services can be loaded and answer requests during an active local task. It does not establish sustained simultaneous decoding throughput or a full Bonsai coding-pod run.
+- Qwen's Splash memory pressure changed from `normal` to `warning` after the Bonsai request. We stopped the separate Bonsai process cleanly; port 3322 closed, Qwen remained ready, its pressure returned to `normal`, and macOS free-memory percentage rose to about 38%. This observation is a reason to keep parallel task dispatch disabled pending longer controlled tests and memory admission limits; it does not establish the exact cause of the pressure change.
+
 ## Next qualification gate
 
-When the active company wave is complete, run both models sequentially on the same Splash 1.1.0 runtime with short, medium, and tool-heavy tasks. Record time to first token, prompt and completion throughput, correctness, memory, preparation disk, and failure modes. Include a real Paperclip coding-pod run only after V2 has explicit Bonsai selection and queue-safe model switching. Preserve Qwen as the named default until that path is implemented and verified.
+When the active company wave is complete, run both models sequentially on the same Splash 1.1.0 runtime with short, medium, and tool-heavy tasks. Record time to first token, prompt and completion throughput, correctness, memory, preparation disk, and failure modes. If parallel loading is pursued, first define a combined memory ceiling and repeat under sustained dual inference without a live company task at risk. Include a real Paperclip Bonsai coding-pod run only after V2 has explicit Bonsai selection and queue-safe admission. Preserve Qwen as the named default until that path is implemented and verified.
