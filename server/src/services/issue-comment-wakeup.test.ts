@@ -47,6 +47,18 @@ describe("shouldWakeAssigneeForIssueComment", () => {
     ).toBe(false);
   });
 
+  it("keeps watchdog evidence comments inert but permits an explicit resume", () => {
+    const base = {
+      selfComment: false,
+      watchdogComment: true,
+      issueAtCommentStart: {},
+      reopened: false,
+      currentStatus: "blocked",
+    };
+    expect(shouldWakeAssigneeForIssueComment({ ...base, resumeRequested: false })).toBe(false);
+    expect(shouldWakeAssigneeForIssueComment({ ...base, resumeRequested: true })).toBe(true);
+  });
+
   it("does not wake a closed issue unless the comment reopened it", () => {
     const base = {
       selfComment: false,

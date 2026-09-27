@@ -542,6 +542,29 @@ describeEmbeddedPostgres("issue watchdog routes", () => {
     expect(allowedChild.body.parentId).toBe(watchedChildId);
   });
 
+  it("records a watchdog evidence comment without waking the blocked source assignee", async () => {
+    const companyId = await seedCompany();
+    const workerAgentId = await seedAgent(companyId, { name: "Worker" });
+    const watchdogAgentId = await seedAgent(companyId, { name: "Reviewer" });
+    const sourceId = await seedIssue(companyId, { status: "blocked", assigneeAgentId: workerAgentId,
+      identifier: "WDOG-EVIDENCE" });
+    const watchdogIssueId = await seedIssue(companyId, { parentId: sourceId,
+      status: "in_progress", assigneeAgentId: watchdogAgentId,
+      originKind: "task_watchdog", originId: sourceId });
+    const runId = await seedWatchdogRun({ companyId, watchdogAgentId,
+      watchedIssueId: sourceId, watchdogIssueId });
+    const app = createApp(companyId, { type: "agent", agentId: watchdogAgentId,
+      companyId, runId, source: "agent_jwt" });
+
+    const response = await request(app).post(`/api/issues/${sourceId}/comments`)
+      .send({ body: "Verified the saved files; status repair follows." });
+    expect(response.status, JSON.stringify(response.body)).toBe(201);
+    const workerWakes = await db.select({ id: agentWakeupRequests.id })
+      .from(agentWakeupRequests)
+      .where(and(eq(agentWakeupRequests.companyId, companyId), eq(agentWakeupRequests.agentId, workerAgentId)));
+    expect(workerWakes).toHaveLength(0);
+  });
+
   it("routes watchdog-discovered product bugs outside the watched source tree with evidence links", async () => {
     const companyId = await seedCompany();
     const watchdogAgentId = await seedAgent(companyId, { name: "Product Bug Watchdog" });

@@ -768,6 +768,8 @@ The watchdog agent acts in a scoped capacity, not as the original deliverable wo
 
 Watchdogs must not create visible probe issues, comments, or throwaway tasks to discover capability boundaries. They should rely on the wake capability metadata and explicit API denials, then record any denied operation as evidence in the reusable watchdog issue.
 
+An informational comment by a task watchdog on a watched source issue records evidence without waking that issue's assignee. To request a new assignee turn through a comment, the watchdog must set `resume: true` explicitly. This lets a reviewer comment and then make a status or blocker repair without its own comment creating a competing wake that invalidates the observed stop.
+
 The watchdog should verify stopped leaves against comments, documents, work products, tests, screenshots, blockers, review state, and run context. It should not accept "I could not" or "waiting for approval" as sufficient by itself.
 
 When work should continue, the watchdog restores a live path inside the watched subtree: reopen or reassign stuck work, create follow-up issues, repair blockers, set a monitor, or resolve an interaction that its ordinary agent audience permits. When the stopped state is legitimate, the watchdog records why and leaves the subtree with a valid terminal, waiting, blocked, review, or explicit recovery path.

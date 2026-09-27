@@ -18092,6 +18092,8 @@ export function issueRoutes(
         // explicit resume from a completed prior run remains a valid new turn.
         const shouldWakeAssigneeForComment = shouldWakeAssigneeForIssueComment({
           selfComment,
+          watchdogComment: req.actor.type === "agent" && !selfComment && resumeRequested !== true &&
+            (await resolveTaskWatchdogMutationScope(db, req.actor)).kind === "watchdog",
           resumeRequested: resumeRequested === true,
           commentCreatedByRunId: comment.createdByRunId,
           issueAtCommentStart: issue,
