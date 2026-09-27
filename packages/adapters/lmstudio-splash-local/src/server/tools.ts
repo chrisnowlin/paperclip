@@ -26,7 +26,7 @@ export const LMSTUDIO_TOOL_DEFINITIONS: LmStudioToolDefinition[] = [
     parameters: { ...object, properties: { path: { type: "string" } }, required: ["path"] } } },
   { type: "function", function: { name: "write_file", description: "Atomically write a UTF-8 file inside an existing workspace directory.",
     parameters: { ...object, properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } } },
-  { type: "function", function: { name: "run_command", description: "Run an argv command in the assigned local-trusted workspace. No shell is added. Maximum 300 seconds.",
+  { type: "function", function: { name: "run_command", description: "Run a finite argv command in the assigned local-trusted workspace. No shell is added. Maximum 300 seconds. Do not start a persistent dev server here: timeout aborts the entire agent run.",
     parameters: { ...object, properties: { command: { type: "string" }, args: { type: "array", items: { type: "string" } }, timeoutMs: { type: "integer" } }, required: ["command"] } } },
   { type: "function", function: { name: "paperclip_request", description: "Call Paperclip with run auth. GET /api/companies/{companyId}/issues or /agents, /api/issues/{issueId} or /comments, or /api/agents/me; POST /api/companies/{companyId}/issues or /api/issues/{issueId}/comments; PATCH /api/issues/{issueId}. Task creation requires body.idempotencyKey. Issue access remains company-authorized by Paperclip.",
     parameters: { ...object, properties: { method: { type: "string", enum: ["GET", "POST", "PATCH"] }, path: { type: "string" }, body: { type: "object" } }, required: ["method", "path"] } } },
