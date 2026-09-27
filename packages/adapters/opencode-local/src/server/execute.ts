@@ -83,8 +83,9 @@ function parseModelProvider(model: string | null): string | null {
 
 export function resolveOpenCodeBiller(env: Record<string, string>, provider: string | null): string {
   // An unrelated OpenRouter key in the host environment cannot relabel an
-  // explicitly selected Z.ai Coding Plan model or imply an account fallback.
-  if (provider === "zai-coding-plan") return provider;
+  // explicitly selected Z.ai Coding Plan or OpenCode Zen model, nor imply an
+  // account fallback.
+  if (provider === "zai-coding-plan" || provider === "opencode") return provider;
   return inferOpenAiCompatibleBiller(env, null) ?? provider ?? "unknown";
 }
 

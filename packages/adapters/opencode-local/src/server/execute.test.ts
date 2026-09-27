@@ -13,9 +13,10 @@ import { runAdapterExecutionTargetProcess } from "@paperclipai/adapter-utils/exe
 
 const runProcessMock = vi.mocked(runAdapterExecutionTargetProcess);
 
-it("keeps explicit Z.ai Coding Plan billing attribution despite an unrelated OpenRouter key", () => {
+it("keeps explicit Z.ai and OpenCode Zen billing attribution despite an unrelated OpenRouter key", () => {
   const env = { OPENROUTER_API_KEY: "fixture-key" };
   expect(resolveOpenCodeBiller(env, "zai-coding-plan")).toBe("zai-coding-plan");
+  expect(resolveOpenCodeBiller(env, "opencode")).toBe("opencode");
   expect(resolveOpenCodeBiller(env, "openai")).toBe("openrouter");
 });
 
