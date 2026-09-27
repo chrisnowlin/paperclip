@@ -380,6 +380,7 @@ describe("direct LM Studio Splash heartbeat", () => {
     expect(system).toContain("project workspace");
     expect(system).toContain("task watchdog");
     expect(system).toContain("Keep the parent blocked on unfinished children");
+    expect(system).toContain("compare each original parent acceptance criterion with the child scopes");
     expect(logs.join("")).not.toContain("PRIVATE_LOCAL_REASONING");
   });
 
