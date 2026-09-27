@@ -12,6 +12,7 @@ const WATCHDOG_SETUP_TIMEOUT_MS = 5_000;
 const ACTIONLESS_TURN_REVIEW_MS = 8 * 60_000;
 const ACTIONLESS_TURN_REVIEW_TOKENS = 20_000;
 const ISSUE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const INVOKABLE_LOCAL_MANAGER_STATUSES = new Set(["active", "idle", "running", "error"]);
 type TaskSkipReason = "done" | "cancelled" | "blocked" | "reassigned";
 
 export function actionlessTurnExhausted(elapsedMs: number, generatedTokens: number, reasoningChars: number,
@@ -104,7 +105,7 @@ async function preflightLocalTaskAndWatchdog(input: {
         if (managerResponse.ok) {
           const manager = record(await managerResponse.json());
           if (manager.id === input.managerId && manager.companyId === input.companyId &&
-            manager.adapterType === "lmstudio_splash_local" && manager.status === "active") {
+            manager.adapterType === "lmstudio_splash_local" && INVOKABLE_LOCAL_MANAGER_STATUSES.has(String(manager.status))) {
             watchdogAgentId = input.managerId;
           }
         }

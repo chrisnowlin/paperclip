@@ -302,6 +302,7 @@ describe("direct LM Studio Splash heartbeat", () => {
     let reportsTo: string | null = null;
     let managerAdapterType = "lmstudio_splash_local";
     let managerCompanyId = "company-1";
+    let managerStatus = "idle";
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
       const method = init?.method ?? "GET";
       requests.push({ url, method, body: init?.body ? String(init.body) : null,
@@ -311,7 +312,7 @@ describe("direct LM Studio Splash heartbeat", () => {
         return new Response(JSON.stringify(method === "PUT" ? { id: "watchdog-new" } : existingWatchdog));
       }
       if (url.endsWith(`/api/agents/${managerId}`)) return new Response(JSON.stringify({
-        id: managerId, companyId: managerCompanyId, adapterType: managerAdapterType, status: "active",
+        id: managerId, companyId: managerCompanyId, adapterType: managerAdapterType, status: managerStatus,
       }));
       const readiness = splashReadiness(url);
       if (readiness) return readiness;
@@ -335,6 +336,15 @@ describe("direct LM Studio Splash heartbeat", () => {
     requests.length = 0;
     await run();
     expect(JSON.parse(requests.find((request) => request.method === "PUT")!.body!)).toMatchObject({ agentId: managerId });
+    managerStatus = "error";
+    requests.length = 0;
+    await run();
+    expect(JSON.parse(requests.find((request) => request.method === "PUT")!.body!)).toMatchObject({ agentId: managerId });
+    managerStatus = "paused";
+    requests.length = 0;
+    await run();
+    expect(JSON.parse(requests.find((request) => request.method === "PUT")!.body!)).toMatchObject({ agentId });
+    managerStatus = "idle";
     managerAdapterType = "opencode_local";
     requests.length = 0;
     await run();
