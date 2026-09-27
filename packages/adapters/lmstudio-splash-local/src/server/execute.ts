@@ -12,6 +12,7 @@ const WATCHDOG_SETUP_TIMEOUT_MS = 5_000;
 const ACTIONLESS_TURN_REVIEW_MS = 8 * 60_000;
 const ACTIONLESS_TURN_REVIEW_TOKENS = 20_000;
 const ISSUE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+type TaskSkipReason = "done" | "cancelled" | "blocked" | "reassigned";
 
 export function actionlessTurnExhausted(elapsedMs: number, generatedTokens: number, reasoningChars: number,
   toolDraftAgeMs = Number.POSITIVE_INFINITY): boolean {
@@ -24,13 +25,49 @@ function record(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+function taskSkipReason(source: Record<string, unknown>, issueId: string, agentId: string): TaskSkipReason | null {
+  if (source.id !== issueId) return null;
+  if (Array.isArray(source.blockedBy) && source.blockedBy.some((blocker) => record(blocker).status !== "done")) return "blocked";
+  if (source.status === "done" || source.status === "cancelled" || source.status === "blocked") return source.status;
+  if (typeof source.assigneeAgentId === "string" && source.assigneeAgentId !== agentId) return "reassigned";
+  return null;
+}
+
+async function readTaskSkipReason(input: { apiUrl: string; issueId: string | null; agentId: string;
+  authToken: string; signal: AbortSignal }): Promise<TaskSkipReason | null> {
+  if (!input.issueId || !ISSUE_ID_PATTERN.test(input.issueId)) return null;
+  const base = input.apiUrl.endsWith("/") ? input.apiUrl : `${input.apiUrl}/`;
+  try {
+    const response = await fetch(new URL(`api/issues/${input.issueId}`, base).toString(), {
+      headers: { Authorization: `Bearer ${input.authToken}` },
+      signal: AbortSignal.any([input.signal, AbortSignal.timeout(WATCHDOG_SETUP_TIMEOUT_MS)]),
+    });
+    if (!response.ok) throw new Error("Task state unavailable.");
+    const source = record(await response.json());
+    if (source.id !== input.issueId) throw new Error("Task state mismatch.");
+    return taskSkipReason(source, input.issueId, input.agentId);
+  } catch {
+    throw new Error("Paperclip task state could not be confirmed; no further local model tool was run.");
+  }
+}
+
+async function skippedTaskResult(ctx: AdapterExecutionContext, reason: TaskSkipReason,
+  usage: { inputTokens: number; outputTokens: number }): Promise<AdapterExecutionResult> {
+  await ctx.onLog("stdout", `${JSON.stringify({ type: "skipped_stale_task", reason })}\n`);
+  return { exitCode: 0, signal: null, timedOut: false, provider: "splash", biller: "local",
+    model: LMSTUDIO_SPLASH_MODEL, billingType: "fixed", costUsd: 0, usageBasis: "per_run",
+    usage, sessionId: null, sessionParams: null, sessionDisplayId: null, clearSession: true,
+    summary: `The task became ${reason} during local Splash execution; no further model tool was run.`,
+    resultJson: { skippedStaleTask: reason } };
+}
+
 async function preflightLocalTaskAndWatchdog(input: {
   apiUrl: string;
   issueId: string | null;
   agentId: string;
   authToken: string;
   signal: AbortSignal;
-}): Promise<{ watchdogReady: boolean; skipReason: "done" | "cancelled" | "blocked" | "reassigned" | null }> {
+}): Promise<{ watchdogReady: boolean; skipReason: TaskSkipReason | null }> {
   if (!input.issueId || !ISSUE_ID_PATTERN.test(input.issueId)) return { watchdogReady: true, skipReason: null };
   const signal = AbortSignal.any([input.signal, AbortSignal.timeout(WATCHDOG_SETUP_TIMEOUT_MS)]);
   const base = input.apiUrl.endsWith("/") ? input.apiUrl : `${input.apiUrl}/`;
@@ -42,17 +79,8 @@ async function preflightLocalTaskAndWatchdog(input: {
     if (!sourceResponse.ok) return { watchdogReady: false, skipReason: null };
     const source = record(await sourceResponse.json());
     if (source.id !== input.issueId) return { watchdogReady: false, skipReason: null };
-    // Dependency state is authoritative even if a concurrent wake briefly
-    // projects the issue as in_progress while its blocker is still unresolved.
-    if (Array.isArray(source.blockedBy) && source.blockedBy.some((blocker) => record(blocker).status !== "done")) {
-      return { watchdogReady: true, skipReason: "blocked" };
-    }
-    if (source.status === "done" || source.status === "cancelled" || source.status === "blocked") {
-      return { watchdogReady: true, skipReason: source.status };
-    }
-    if (typeof source.assigneeAgentId === "string" && source.assigneeAgentId !== input.agentId) {
-      return { watchdogReady: true, skipReason: "reassigned" };
-    }
+    const skipReason = taskSkipReason(source, input.issueId, input.agentId);
+    if (skipReason) return { watchdogReady: true, skipReason };
     if (source.originKind === "task_watchdog") return { watchdogReady: true, skipReason: null };
     const existingResponse = await fetch(watchdogUrl.toString(), { headers, signal });
     if (!existingResponse.ok) return { watchdogReady: false, skipReason: null };
@@ -101,18 +129,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ? AbortSignal.any([ctx.signal, AbortSignal.timeout(MAX_RUN_MS)])
       : AbortSignal.timeout(MAX_RUN_MS);
     const apiUrl = buildPaperclipEnv(ctx.agent).PAPERCLIP_API_URL;
+    const issueId = typeof ctx.context.taskId === "string" ? ctx.context.taskId : null;
     const taskPreflight = await preflightLocalTaskAndWatchdog({
-      apiUrl, issueId: typeof ctx.context.taskId === "string" ? ctx.context.taskId : null,
+      apiUrl, issueId,
       agentId: ctx.agent.id, authToken: ctx.authToken, signal: runSignal,
     });
     if (taskPreflight.skipReason) {
-      await ctx.onLog("stdout", `${JSON.stringify({ type: "skipped_stale_task", reason: taskPreflight.skipReason })}\n`);
-      return { exitCode: 0, signal: null, timedOut: false, provider: "splash", biller: "local",
-        model: LMSTUDIO_SPLASH_MODEL, billingType: "fixed", costUsd: 0, usageBasis: "per_run",
-        usage: { inputTokens: 0, outputTokens: 0 }, sessionId: null, sessionParams: null,
-        sessionDisplayId: null, clearSession: true,
-        summary: `The task became ${taskPreflight.skipReason} while waiting for local Splash; no model turn was sent.`,
-        resultJson: { skippedStaleTask: taskPreflight.skipReason } };
+      return skippedTaskResult(ctx, taskPreflight.skipReason, { inputTokens: 0, outputTokens: 0 });
     }
     if (!taskPreflight.watchdogReady) {
       await reportQueueStatus("Local task watchdog setup was unavailable; this run continues and task recovery needs review.");
@@ -135,6 +158,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     let dispatched = false;
     for (let step = 0; step < maxSteps; step += 1) {
       if (runSignal.aborted) throw new Error("App-managed Splash run was cancelled or timed out.");
+      const staleBeforeTurn = await readTaskSkipReason({ apiUrl, issueId, agentId: ctx.agent.id,
+        authToken: ctx.authToken, signal: runSignal });
+      if (staleBeforeTurn) return skippedTaskResult(ctx, staleBeforeTurn, { inputTokens, outputTokens });
       await probeLmStudioSplash(fetch, runSignal);
       if (!dispatched) { ctx.onDispatch?.(); dispatched = true; }
       await reportQueueStatus("Splash is generating locally; a turn can take several minutes.");
@@ -197,6 +223,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       finally { turnActive = false; clearInterval(progressTimer); }
       inputTokens += turn.usage.inputTokens;
       outputTokens += turn.usage.outputTokens;
+      const stale = await readTaskSkipReason({ apiUrl, issueId, agentId: ctx.agent.id,
+        authToken: ctx.authToken, signal: runSignal });
+      if (stale) return skippedTaskResult(ctx, stale, { inputTokens, outputTokens });
       if (turn.toolCalls.length === 0) {
         const summary = turn.content ?? "";
         await ctx.onLog("stdout", `${JSON.stringify({ type: "assistant", text: summary })}\n`);
@@ -210,6 +239,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         tool_calls: turn.toolCalls.map((call) => ({ id: call.id, type: "function" as const,
           function: { name: call.name, arguments: JSON.stringify(call.arguments) } })) });
       for (const call of turn.toolCalls) {
+        const staleBeforeTool = await readTaskSkipReason({ apiUrl, issueId, agentId: ctx.agent.id,
+          authToken: ctx.authToken, signal: runSignal });
+        if (staleBeforeTool) return skippedTaskResult(ctx, staleBeforeTool, { inputTokens, outputTokens });
         toolCallCount += 1;
         if (toolCallCount > MAX_TOOL_CALLS) throw new Error("App-managed Splash tool call limit reached.");
         await ctx.onLog("stdout", `${JSON.stringify({ type: "tool_call", name: call.name })}\n`);

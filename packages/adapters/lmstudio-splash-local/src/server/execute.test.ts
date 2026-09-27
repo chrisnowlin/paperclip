@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -105,6 +105,94 @@ describe("direct LM Studio Splash heartbeat", () => {
     });
     expect(result).toMatchObject({ resultJson: { skippedStaleTask: "blocked" }, usage: { outputTokens: 0 } });
     expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it("does not apply a completed write tool after the board closes the task mid-generation", async () => {
+    const root = await workspace();
+    const issueId = "8eab2670-f2b8-4d0c-8f95-d595a1c30f78";
+    let sourceReads = 0;
+    let completions = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url.endsWith(`/api/issues/${issueId}`)) {
+        sourceReads += 1;
+        return new Response(JSON.stringify({ id: issueId, status: sourceReads < 3 ? "in_progress" : "done" }));
+      }
+      if (url.endsWith(`/api/issues/${issueId}/watchdog`)) return new Response(JSON.stringify({ id: "named-watcher" }));
+      const readiness = splashReadiness(url);
+      if (readiness) return readiness;
+      completions += 1;
+      return streamTurn(completions === 1 ? { choices: [{ finish_reason: "tool_calls", message: {
+        content: null, tool_calls: [{ id: "call-write", type: "function", function: { name: "write_file",
+          arguments: JSON.stringify({ path: "README.md", content: "OVERWRITTEN\n" }) } }],
+      } }], usage: { prompt_tokens: 100, completion_tokens: 20 } } : finalTurn);
+    }));
+    const logs: string[] = [];
+    const result = await execute({
+      runId: "run-closed", agent: { id: "agent-1", companyId: "company-1", name: "Local",
+        adapterType: "lmstudio_splash_local", adapterConfig: {} },
+      runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+      config: { cwd: root }, context: { ...context(root), taskId: issueId },
+      authToken: "private-run-token", onLog: async (_stream, value) => { logs.push(value); },
+    });
+    expect(result).toMatchObject({ resultJson: { skippedStaleTask: "done" } });
+    expect(await readFile(path.join(root, "README.md"), "utf8")).toBe("Project brief\n");
+    expect(logs.join("")).not.toContain('"name":"write_file"');
+  });
+
+  it("fails closed before inference when the run can no longer confirm its task state", async () => {
+    const root = await workspace();
+    const issueId = "8eab2670-f2b8-4d0c-8f95-d595a1c30f78";
+    let sourceReads = 0;
+    const fetcher = vi.fn(async (url: string) => {
+      if (url.endsWith(`/api/issues/${issueId}`)) {
+        sourceReads += 1;
+        if (sourceReads === 1) return new Response(JSON.stringify({ id: issueId, status: "in_progress" }));
+        throw new Error("control plane disconnected");
+      }
+      if (url.endsWith(`/api/issues/${issueId}/watchdog`)) return new Response(JSON.stringify({ id: "named-watcher" }));
+      throw new Error(`Unexpected model request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    await expect(execute({
+      runId: "run-unconfirmed", agent: { id: "agent-1", companyId: "company-1", name: "Local",
+        adapterType: "lmstudio_splash_local", adapterConfig: {} },
+      runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+      config: { cwd: root }, context: { ...context(root), taskId: issueId },
+      authToken: "private-run-token", onLog: async () => {},
+    })).rejects.toThrow("task state could not be confirmed");
+    expect(fetcher.mock.calls.some(([url]) => url.endsWith("/v1/chat/completions"))).toBe(false);
+  });
+
+  it("does not execute a later tool after an earlier tool closes the task in the same batch", async () => {
+    const root = await workspace();
+    const issueId = "8eab2670-f2b8-4d0c-8f95-d595a1c30f78";
+    let sourceStatus = "in_progress";
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith(`/api/issues/${issueId}`) && init?.method === "PATCH") {
+        sourceStatus = "done";
+        return new Response("{}");
+      }
+      if (url.endsWith(`/api/issues/${issueId}`)) return new Response(JSON.stringify({ id: issueId, status: sourceStatus }));
+      if (url.endsWith(`/api/issues/${issueId}/watchdog`)) return new Response(JSON.stringify({ id: "named-watcher" }));
+      const readiness = splashReadiness(url);
+      if (readiness) return readiness;
+      return streamTurn({ choices: [{ finish_reason: "tool_calls", message: { content: null, tool_calls: [
+        { id: "call-close", type: "function", function: { name: "paperclip_request",
+          arguments: JSON.stringify({ method: "PATCH", path: `/api/issues/${issueId}`, body: { status: "done" } }) } },
+        { id: "call-write", type: "function", function: { name: "write_file",
+          arguments: JSON.stringify({ path: "README.md", content: "OVERWRITTEN\n" }) } },
+      ] } }], usage: { prompt_tokens: 100, completion_tokens: 30 } });
+    }));
+    const result = await execute({
+      runId: "run-batch", agent: { id: "agent-1", companyId: "company-1", name: "Local",
+        adapterType: "lmstudio_splash_local", adapterConfig: {} },
+      runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+      config: { cwd: root }, context: { ...context(root), taskId: issueId },
+      authToken: "private-run-token", onLog: async () => {},
+    });
+    expect(sourceStatus).toBe("done");
+    expect(result).toMatchObject({ resultJson: { skippedStaleTask: "done" } });
+    expect(await readFile(path.join(root, "README.md"), "utf8")).toBe("Project brief\n");
   });
 
   it("allows slow local generation until both the time and output thresholds are reached", () => {

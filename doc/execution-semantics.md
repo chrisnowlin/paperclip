@@ -707,16 +707,21 @@ blocker despite a temporary `in_progress` projection, it records a
 metadata-only skipped task result and sends no model turn. This prevents an
 inappropriate local model dispatch; the control plane remains responsible for
 releasing the wait and restoring a live path when the blocker actually resolves.
-The adapter
-also ends an individual inference turn that has spent at least eight minutes
+Before every model turn, after a turn finishes, and immediately before each
+individual tool call in a batch, the adapter repeats that state check. A
+terminal, reassigned, or dependency-blocked source suppresses the returned
+tools; an unavailable task-state read fails closed rather than writing under
+uncertainty.
+
+The adapter also ends an individual inference turn that has spent at least eight minutes
 and about 20,000 generated tokens without returning a task tool action. It
 records only the count, elapsed time, and step as a `scope_stall` run event;
 private reasoning text remains out of the run log. The 25-minute deadline
 remains the hard limit for other turns. A live stream of tool-call arguments
 does not count as actionless: the live view shows only the known tool name and
 argument character count while the complete call is assembled and validated.
-Partial arguments are never executed or written to the run log. The active-run output-silence signal
-remains informational; the bounded adapter stop supplies an agent-owned review
+Partial arguments are never executed or written to the run log. The active-run
+output-silence signal remains informational; the bounded adapter stop supplies an agent-owned review
 path when a source subtree then lacks a valid live or waiting path.
 
 The scan scope is:
