@@ -119,8 +119,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     catch { /* progress reporting must not prevent local work */ }
   };
   let queuedProgress: Promise<void> | null = null;
+  let queueStatusTimer: ReturnType<typeof setInterval> | null = null;
   const release = await splashRunQueue.acquire(queueSignal, (position) => {
     queuedProgress = reportQueueStatus(`Queued for the local Splash model (joined at position ${position}).`);
+    // Runtime status expires after 90 seconds. Refresh the wait state so a
+    // healthy serial queue does not look like a disconnected provider run.
+    queueStatusTimer = setInterval(() => {
+      void reportQueueStatus("Waiting for the local Splash model; another local run has the slot.");
+    }, 30_000);
+  }).finally(() => {
+    if (queueStatusTimer) clearInterval(queueStatusTimer);
   });
   try {
     if (queuedProgress) await queuedProgress;

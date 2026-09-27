@@ -344,15 +344,18 @@ describe("direct LM Studio Splash heartbeat", () => {
     });
     const first = run("run-first");
     await firstTurnStarted;
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const second = run("run-second");
     try {
       await new Promise((resolve) => setTimeout(resolve, 25));
+      await vi.advanceTimersByTimeAsync(30_000);
       expect(modelProbes).toBe(1);
       expect(completions).toBe(1);
       expect(dispatches).toEqual(["run-first"]);
       expect(cancellationReady).toEqual(["run-first", "run-second"]);
       expect(progress).toContain("Queued for the local Splash model (joined at position 1).");
-    } finally { releaseFirst(); }
+      expect(progress).toContain("Waiting for the local Splash model; another local run has the slot.");
+    } finally { releaseFirst(); vi.useRealTimers(); }
     await Promise.all([first, second]);
     expect(modelProbes).toBe(2);
     expect(completions).toBe(2);
