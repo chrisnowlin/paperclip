@@ -289,6 +289,11 @@ export function projectExecution(
   if (["failed", "cancelled", "timed_out", "interrupted"].includes(run.status))
     return set("failed", run.status === "cancelled" ? "Cancelled" : "Failed");
   if (run.status === "running") {
+    // In-process local adapters do not expose a provider PID or native lease.
+    // Fresh output is still authoritative evidence that their run is active.
+    const recentOutputConfirmed = run.lastOutputAt != null &&
+      now.getTime() - run.lastOutputAt.getTime() <= 90_000 &&
+      now.getTime() >= run.lastOutputAt.getTime();
     const leaseConfirmed =
       coordinator?.phase === "observed" &&
       coordinator.leaseExpiresAt &&
@@ -302,7 +307,7 @@ export function projectExecution(
         /* No execution confirmation. */
       }
     }
-    return leaseConfirmed || processConfirmed
+    return leaseConfirmed || processConfirmed || recentOutputConfirmed
       ? set("working", "Working")
       : set("reconnecting", "Confirming execution");
   }

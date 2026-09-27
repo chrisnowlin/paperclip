@@ -120,6 +120,10 @@ describe("execution truth projection", () => {
   });
   it("requires current execution evidence, without treating output silence as failure", () => {
     expect(project(run({ lastOutputAt: new Date(0) })).phase).toBe("working");
+    expect(projectExecution(run({ lastOutputAt: new Date(now.getTime() - 30_000) }), undefined, [], undefined, now))
+      .toMatchObject({ phase: "working", label: "Working" });
+    expect(projectExecution(run({ lastOutputAt: new Date(now.getTime() - 120_000) }), undefined, [], undefined, now))
+      .toMatchObject({ phase: "reconnecting", label: "Confirming execution" });
     expect(
       project(run(), coordinator({ leaseExpiresAt: new Date(0) })),
     ).toMatchObject({ phase: "reconnecting", label: "Confirming execution" });
