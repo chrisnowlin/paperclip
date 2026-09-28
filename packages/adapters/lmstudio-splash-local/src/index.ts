@@ -29,4 +29,5 @@ For a project task, register_deliverable can attach a finished file of up to 10 
 Live long-turn status can show a short local reasoning excerpt and approximate token count; the excerpt is not written to the run log. Partial streamed tool calls are never executed.
 While Splash prepares a large prompt, live status shows approximate input tokens processed before output token generation begins.
 For CEO, CTO, and engineer turns, one actionless long-reasoning attempt is interrupted and refocused on a concrete task action; a repeated stall stops the run for watchdog review.
+The last model step on a task offers only task-disposition actions. The agent must finish workspace edits and checks earlier, then set a verified done, blocked, or review state; unverified last-step prose does not complete the task.
 `;
