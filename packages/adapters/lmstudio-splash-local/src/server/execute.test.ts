@@ -152,6 +152,72 @@ describe("direct LM Studio Splash heartbeat", () => {
     expect(result).toMatchObject({ resultJson: { skippedStaleTask: "done" } });
   });
 
+  it("reserves the final local step for a verified task disposition", async () => {
+    const root = await workspace();
+    const issueId = "8eab2670-f2b8-4d0c-8f95-d595a1c30f78";
+    const agentId = "cc349b6e-bb92-45c3-b16c-e5f69c971015";
+    let issueStatus = "in_progress";
+    let modelTurns = 0;
+    const advertisedTools: string[][] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith(`/api/issues/${issueId}/watchdog`)) return new Response(JSON.stringify({ id: "named-watcher" }));
+      if (url.endsWith(`/api/issues/${issueId}`)) {
+        if (init?.method === "PATCH") issueStatus = "blocked";
+        return new Response(JSON.stringify({ id: issueId, status: issueStatus, assigneeAgentId: agentId }));
+      }
+      const readiness = splashReadiness(url);
+      if (readiness) return readiness;
+      if (url.endsWith("/v1/chat/completions")) {
+        const body = JSON.parse(String(init?.body)) as { tools: Array<{ function: { name: string } }> };
+        advertisedTools.push(body.tools.map((tool) => tool.function.name));
+        modelTurns += 1;
+        return modelTurns === 1 ? streamTurn(toolTurn) : streamTurn({ choices: [{ finish_reason: "tool_calls",
+          message: { content: null, tool_calls: [{ id: "final-disposition", type: "function", function: {
+            name: "paperclip_request", arguments: JSON.stringify({ method: "PATCH", path: `/api/issues/${issueId}`,
+              body: { status: "blocked", unblockDescriptor: { owner: { agentId }, action: "Finish the remaining code and tests." } } }),
+          } }] } }] });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    const result = await execute({
+      runId: "run-final-disposition", agent: { id: agentId, companyId: "company-1", name: "Local",
+        adapterType: "lmstudio_splash_local", adapterConfig: {} },
+      runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+      config: { cwd: root, maxSteps: 2 }, context: { ...context(root), taskId: issueId },
+      authToken: "private-run-token", onLog: async () => {},
+    });
+    expect(advertisedTools[0]).toContain("write_file");
+    expect(advertisedTools[1]).toEqual(["paperclip_request"]);
+    expect(result).toMatchObject({ exitCode: 0, resultJson: { taskDisposition: "blocked" } });
+    expect(issueStatus).toBe("blocked");
+  });
+
+  it("rejects a workspace edit emitted despite the final-step tool restriction", async () => {
+    const root = await workspace();
+    const issueId = "8eab2670-f2b8-4d0c-8f95-d595a1c30f78";
+    const agentId = "cc349b6e-bb92-45c3-b16c-e5f69c971015";
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url.endsWith(`/api/issues/${issueId}`)) return new Response(JSON.stringify({
+        id: issueId, status: "in_progress", assigneeAgentId: agentId,
+      }));
+      if (url.endsWith(`/api/issues/${issueId}/watchdog`)) return new Response(JSON.stringify({ id: "named-watcher" }));
+      const readiness = splashReadiness(url);
+      if (readiness) return readiness;
+      return streamTurn({ choices: [{ finish_reason: "tool_calls", message: { content: null, tool_calls: [{
+        id: "unoffered-write", type: "function", function: { name: "write_file",
+          arguments: JSON.stringify({ path: "unsafe.txt", content: "not allowed" }) },
+      }] } }] });
+    }));
+    await expect(execute({
+      runId: "run-final-reject", agent: { id: agentId, companyId: "company-1", name: "Local",
+        adapterType: "lmstudio_splash_local", adapterConfig: {} },
+      runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+      config: { cwd: root, maxSteps: 1 }, context: { ...context(root), taskId: issueId },
+      authToken: "private-run-token", onLog: async () => {},
+    })).rejects.toThrow("without a verified task disposition");
+    await expect(readFile(path.join(root, "unsafe.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("does not apply a completed write tool after the board closes the task mid-generation", async () => {
     const root = await workspace();
     const issueId = "8eab2670-f2b8-4d0c-8f95-d595a1c30f78";

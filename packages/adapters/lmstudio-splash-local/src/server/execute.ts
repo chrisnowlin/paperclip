@@ -124,7 +124,7 @@ async function preflightLocalTaskAndWatchdog(input: {
     const created = await fetch(watchdogUrl.toString(), { method: "PUT", signal,
       headers: { ...headers, "Content-Type": "application/json", "X-Paperclip-Create-Only": "true" },
       body: JSON.stringify({ agentId: watchdogAgentId,
-        instructions: "Review this stopped local Splash task and its existing work. If the task is too broad or a run made no durable progress, preserve files, split the remaining work into one bounded local child with the same project workspace, set first-class dependencies, and record the decision. Verify before marking done. Do not retry the same scope indefinitely or route private source to a remote provider." }),
+        instructions: "Review this stopped local Splash task and its existing work. If a run made no durable progress, the replacement must be demonstrably smaller: choose exactly one module, pure function, or single interaction plus its finite check. Do not restate a multi-stage feature as one child or bundle the original requirements into a priority list. Preserve files, create only that narrow local child in the same project workspace with a first-class blocker, and record the deferred requirements for later company tasks. Verify before marking done. Do not retry the same scope indefinitely or route private source to a remote provider." }),
     });
     return { watchdogReady: created.ok, skipReason: null };
   } catch {
@@ -195,7 +195,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ctoAgentId: ctx.agent.role === "cto" ? ctx.agent.id : undefined,
       hireWorkspaceRoot: ctx.agent.role === "cto" && typeof ctx.config.cwd === "string"
         ? path.dirname(ctx.config.cwd) : undefined });
-    const modelTools = dispositionOnly ? executor.definitions
+    const issueDispositionTools = issueId && ISSUE_ID_PATTERN.test(issueId) ? executor.definitions
       .filter((definition) => definition.function.name === "paperclip_request")
       .map((definition) => ({ ...definition, function: {
         ...definition.function,
@@ -205,7 +205,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           path: { type: "string", enum: [`/api/issues/${issueId}`, `/api/issues/${issueId}/comments`] },
           body: { type: "object" },
         } },
-      } })) : executor.definitions;
+      } })) : [];
+    const modelTools = dispositionOnly ? issueDispositionTools : executor.definitions;
     const wake = renderPaperclipWakePrompt(ctx.context.paperclipWake);
     const task = selectPaperclipTaskMarkdown(ctx.context);
     const prompt = joinPromptSections([wake, task, typeof ctx.config.promptTemplate === "string" ? ctx.config.promptTemplate : ""]);
@@ -225,11 +226,18 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     let refocusAttempts = 0;
     for (let step = 0; step < maxSteps; step += 1) {
       if (runSignal.aborted) throw new Error("App-managed Splash run was cancelled or timed out.");
+      const finalizationOnly = !dispositionOnly && issueId !== null && ISSUE_ID_PATTERN.test(issueId) &&
+        step === maxSteps - 1;
+      const turnTools = finalizationOnly ? issueDispositionTools : modelTools;
       if (step === maxSteps - 3) {
         const taskPath = issueId && ISSUE_ID_PATTERN.test(issueId)
           ? `/api/issues/${issueId}` : "the current Paperclip task";
         messages.push({ role: "system", content:
           `Only three local model turns remain in this run. Stop broad inspection and do not start a new deliverable. Preserve coherent work, run one finite check if needed, then use paperclip_request to record the task's real disposition at ${taskPath}: done with evidence, or blocked/in_review with the exact remaining owner and action. A comment or final prose alone is not a task disposition. Return a concise final response before the step limit; never claim unverified work is done.` });
+      }
+      if (finalizationOnly) {
+        messages.push({ role: "system", content:
+          `This is the last local model turn. Workspace tools are disabled. Do not start or revise code. Use paperclip_request to PATCH /api/issues/${issueId} to the real disposition: done only with verified evidence, or blocked/in_review with the exact remaining owner and action. A comment or final prose alone does not set status. If work remains, preserve the existing files for review.` });
       }
       const staleBeforeTurn = await readTaskSkipReason({ apiUrl, issueId, agentId: ctx.agent.id,
         authToken: ctx.authToken, signal: runSignal });
@@ -292,10 +300,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       }, 15_000);
       progressTimer.unref();
       let turn: Awaited<ReturnType<typeof completeLmStudioTurn>>;
-      try { turn = await completeLmStudioTurn({ messages, tools: modelTools, signal: turnSignal, stream: true,
+      try { turn = await completeLmStudioTurn({ messages, tools: turnTools, signal: turnSignal, stream: true,
         onReasoningDelta: (delta) => { reasoningTail = (reasoningTail + delta).slice(-160); reasoningChars += delta.length; },
         onToolDraftProgress: (progress) => {
-          const name = modelTools.some((definition) => definition.function.name === progress.name)
+          const name = turnTools.some((definition) => definition.function.name === progress.name)
             ? progress.name! : "tool";
           toolDraft = { name, argumentChars: progress.argumentChars, updatedAt: Date.now() };
         },
@@ -326,6 +334,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         authToken: ctx.authToken, signal: runSignal });
       if (stale) return skippedTaskResult(ctx, stale, { inputTokens, outputTokens });
       if (turn.toolCalls.length === 0) {
+        if (finalizationOnly) throw new Error("App-managed Splash final step ended without a task disposition.");
         const summary = turn.content ?? "";
         await ctx.onLog("stdout", `${JSON.stringify({ type: "assistant", text: summary })}\n`);
         return { exitCode: 0, signal: null, timedOut: false, provider: "splash", biller: "local",
@@ -337,6 +346,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       messages.push({ role: "assistant", content: turn.content,
         tool_calls: turn.toolCalls.map((call) => ({ id: call.id, type: "function" as const,
           function: { name: call.name, arguments: JSON.stringify(call.arguments) } })) });
+      let taskDisposition: "done" | "blocked" | "in_review" | "cancelled" | null = null;
       for (const call of turn.toolCalls) {
         const staleBeforeTool = await readTaskSkipReason({ apiUrl, issueId, agentId: ctx.agent.id,
           authToken: ctx.authToken, signal: runSignal });
@@ -347,8 +357,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         let result: string;
         let isError = false;
         try {
-          if (dispositionOnly && !dispositionToolAllowed(call, issueId!)) {
-            throw new Error("Disposition-only run can only read or update its source Paperclip issue.");
+          if ((dispositionOnly || finalizationOnly) && !dispositionToolAllowed(call, issueId!)) {
+            throw new Error("Disposition-only turn can only read or update its source Paperclip issue.");
           }
           result = await executor.execute(call);
         } catch (error) {
@@ -356,8 +366,27 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           isError = true;
           result = JSON.stringify({ error: error instanceof Error ? error.message.slice(0, 1024) : "Tool failed." });
         }
+        if (finalizationOnly && !isError && call.name === "paperclip_request" &&
+            call.arguments.method === "PATCH" && call.arguments.path === `/api/issues/${issueId}`) {
+          let patched: Record<string, unknown>;
+          try { patched = record(JSON.parse(result)); }
+          catch { throw new UncertainPaperclipMutationError(); }
+          if (patched.id !== issueId || !["done", "blocked", "in_review", "cancelled"].includes(String(patched.status))) {
+            throw new UncertainPaperclipMutationError();
+          }
+          taskDisposition = patched.status as typeof taskDisposition;
+        }
         messages.push({ role: "tool", tool_call_id: call.id, content: result.slice(0, 65_536) });
         await ctx.onLog("stdout", `${JSON.stringify({ type: "tool_result", name: call.name, isError })}\n`);
+      }
+      if (finalizationOnly) {
+        if (!taskDisposition) throw new Error("App-managed Splash final step ended without a verified task disposition.");
+        return { exitCode: 0, signal: null, timedOut: false, provider: "splash", biller: "local",
+          model: LMSTUDIO_SPLASH_MODEL, billingType: "fixed", costUsd: 0, usageBasis: "per_run",
+          usage: { inputTokens, outputTokens }, sessionId: null, sessionParams: null,
+          sessionDisplayId: null, clearSession: true,
+          summary: `The task was marked ${taskDisposition} on the final local Splash step.`,
+          resultJson: { toolCallCount, taskDisposition } };
       }
     }
     throw new Error("App-managed Splash step limit reached before a final response.");
